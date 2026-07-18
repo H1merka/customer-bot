@@ -208,3 +208,7 @@ __marimo__/
 
 # Agents ignores
 .github/
+AGENTS.md
+
+# Google credentials
+google_creds.json

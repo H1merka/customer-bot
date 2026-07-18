@@ -1,24 +1,24 @@
 # customer-bot
 
-*Description of project*
+A Telegram bot for piercing studio operations with booking, admin controls, and support chat bridging.
 
-## Table of Contents
+## Features
+- Booking flow with service selection and basic medical questions
+- PostgreSQL-backed persistence via SQLAlchemy
+- Google Calendar integration with graceful degradation
+- Admin commands for access control and support workflows
+- Docker and docker-compose support
 
-- [customer-bot](#customer-bot)
-  - [Table of Contents](#table-of-contents)
-  - [Installation](#installation)
-  - [Usage](#usage)
-  - [Maintainers](#maintainers)
-  - [Contributing](#contributing)
-  - [License](#license)
+## Environment
+Copy [.env.example](.env.example) to .env and fill in the required values.
 
-## Installation
+## Run locally
+1. Install dependencies with `uv sync`
+2. Start the database with `docker compose up -d db`
+3. Run the bot with `uv run python main.py`
 
-*Installation of project*
-
-## Usage
-
-*Usage of project*
+## Tests
+Run `uv run python -m unittest discover -s tests -v`
 
 ## Maintainers
 
