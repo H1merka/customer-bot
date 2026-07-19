@@ -1,0 +1,20 @@
+# Cache data
+__pycache__/
+.mypy_cache/
+
+# Agents' data
+.git/
+.github/
+AGENTS.md
+
+# Environments
+.venv/
+venv/
+
+# Python files
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+logs/
