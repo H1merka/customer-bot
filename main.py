@@ -19,12 +19,21 @@ logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(a
 logger = logging.getLogger(__name__)
 
 
+async def post_init(application: Application) -> None:
+    try:
+        await init_db()
+        logger.info("Database initialized successfully inside post_init")
+    except Exception as exc:
+        logger.exception("Database initialization failed: %s", exc)
+        raise
+
+
 def build_application() -> Application:
     settings = get_settings()
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not configured")
 
-    application = ApplicationBuilder().token(settings.bot_token).build()
+    application = ApplicationBuilder().token(settings.bot_token).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -43,32 +52,15 @@ def build_application() -> Application:
     return application
 
 
-async def main() -> None:
-    try:
-        await init_db()
-        logger.info("Database initialized successfully")
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Database initialization failed: %s", exc)
-        raise
-
+def main() -> None:
     try:
         application = build_application()
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling(allowed_updates=["message", "callback_query"])
+        application.run_polling(allowed_updates=["message", "callback_query"])
         logger.info("Bot started")
-
-        try:
-            await application.updater.idle()
-        except KeyboardInterrupt:
-            logger.info("Shutting down bot")
-            await application.stop()
     except Exception as exc:  # noqa: BLE001
         logger.exception("Bot startup failed: %s", exc)
         raise
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())
+    main()
