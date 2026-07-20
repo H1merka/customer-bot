@@ -72,22 +72,24 @@ async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.
         )
 
     if ticket is not None:
-        from handlers.admin import check_if_admin
-        is_admin_user = await check_if_admin(update.effective_user.id)
+        # Проверяем, является ли сообщение командой перезапуска или закрытия диалога
+        bypass_silent_mode = False
         
-        is_close_command = False
         if update.effective_message and update.effective_message.text:
             text = update.effective_message.text.strip().lower()
-            if text in ["/close", "/close_support"]:
-                is_close_command = True
+            # Разрешаем пользователям использовать команды перезапуска и закрытия диалога
+            if text in ["/start", "старт", "в начало", "/close", "/close_support"]:
+                bypass_silent_mode = True
 
-        is_close_callback = False
+        # Разрешаем обработку нажатия кнопки "Закрыть диалог"
         if update.callback_query and update.callback_query.data == "close_support":
-            is_close_callback = True
+            bypass_silent_mode = True
 
-        if is_admin_user and (is_close_command or is_close_callback):
+        # Если зафиксировано управляющее действие, пропускаем его к обработчикам группы 0
+        if bypass_silent_mode:
             return
 
+        # Для всех остальных сообщений (пока диалог активен) блокируем прохождение
         if update.callback_query:
             await update.callback_query.answer("Диалог с поддержкой активен.")
         raise ApplicationHandlerStop()
@@ -128,8 +130,15 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         chat_id_clean = chat_id_str
 
-    thread_id = update.effective_message.message_thread_id
-    # Безопасное формирование текста в зависимости от наличия ID треда
+    # Извлекаем ID топика прямого сообщения канала (direct_messages_topic) или ID треда форума
+    thread_id = None
+    if update.effective_message:
+        if update.effective_message.direct_messages_topic:
+            thread_id = update.effective_message.direct_messages_topic.topic_id
+        elif update.effective_message.message_thread_id:
+            thread_id = update.effective_message.message_thread_id
+
+    # Формирование текста в зависимости от наличия ID топика прямого сообщения канала
     if thread_id:
         topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
         discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
@@ -150,10 +159,20 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as exc:
             logger.warning("Не удалось отправить оповещение админу %s: %s", admin_id, exc)
 
-    await update.effective_message.reply_text(
-        "Тикет поддержки открыт. Пирсер подключится к диалогу в ближайшее время.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]),
-    )
+    # Параметры отправки для корректной поддержки Channel Direct Messages
+    send_kwargs = {
+        "text": "Тикет поддержки открыт. Пирсер подключится к диалогу в ближайшее время.",
+        "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]),
+    }
+    
+    if getattr(update.effective_chat, "is_direct_messages", False):
+        if thread_id:
+            send_kwargs["direct_messages_topic_id"] = thread_id
+    else:
+        if update.effective_message and update.effective_message.message_thread_id:
+            send_kwargs["message_thread_id"] = update.effective_message.message_thread_id
+
+    await update.effective_chat.send_message(**send_kwargs)
 
 
 async def relay_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -210,7 +229,9 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
 
         async with AsyncSessionFactory() as session:
             ticket = await session.scalar(
-                select(SupportTicket).where(SupportTicket.user_telegram_id == client_id)
+                select(SupportTicket).where(
+                    SupportTicket.user_telegram_id == client_id
+                )
             )
             if ticket is not None:
                 ticket.assigned_admin_id = None
@@ -219,7 +240,17 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
 
         await query.edit_message_text("Диалог закрыт.")
         if update.effective_chat:
-            await update.effective_chat.send_message(
-                "Главное меню",
-                reply_markup=build_main_menu()
-            )
+            send_kwargs = {
+                "text": "Главное меню",
+                "reply_markup": build_main_menu()
+            }
+            if getattr(update.effective_chat, "is_direct_messages", False):
+                topic_id = None
+                if query.message:
+                    if query.message.direct_messages_topic:
+                        topic_id = query.message.direct_messages_topic.topic_id
+                    elif query.message.message_thread_id:
+                        topic_id = query.message.message_thread_id
+                if topic_id:
+                    send_kwargs["direct_messages_topic_id"] = topic_id
+            await update.effective_chat.send_message(**send_kwargs)

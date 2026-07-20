@@ -1,6 +1,7 @@
 # handlers/client.py
 from __future__ import annotations
 
+import html  # Добавлен импорт для безопасного форматирования HTML-разметки
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -10,7 +11,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, fil
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
-from database.models import Booking, BookingStatus, StudioSetting, User
+from database.models import Booking, BookingStatus, StudioSetting, User, UserRole  # Добавлен импорт UserRole
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
 from sqlalchemy import select
@@ -307,6 +308,77 @@ async def process_date_availability(update: Update, context: ContextTypes.DEFAUL
         await update.effective_message.reply_text(text, reply_markup=reply_markup)
 
 
+# Вспомогательные функции для отправки уведомлений администраторам
+
+
+async def notify_admins_about_blood_disease(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Уведомляет всех администраторов о попытке записи пользователя с заболеваниями крови."""
+    settings = get_settings()
+    user = update.effective_user
+    if not user:
+        return
+
+    user_id = user.id
+    username_part = f", @{user.username}" if user.username else ""
+    msg_text = (
+        f"⚠️ Пользователь {user.full_name or 'Unknown'} (ID: {user_id}{username_part}) "
+        f"попытался записаться на сеанс, но указал наличие заболевания крови. "
+        f"Запись была автоматически отклонена."
+    )
+
+    async with AsyncSessionFactory() as session:
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        all_admins = set(settings.admin_telegram_ids) | set(db_admins)
+
+    for admin_id in all_admins:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=msg_text,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить оповещение о заболевании крови админу %s: %s", admin_id, exc)
+
+
+async def notify_admins_about_minor(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    client_age: int,
+    parent_name: str,
+    parent_phone: str
+) -> None:
+    """Уведомляет администраторов о попытке записи несовершеннолетнего."""
+    settings = get_settings()
+    user = update.effective_user
+    if not user:
+        return
+
+    client_name = html.escape(user.full_name or "Unknown")
+    username_str = f" (@{user.username})" if user.username else ""
+
+    msg_text = (
+        f"⚠️ <b>Попытка записи несовершеннолетнего!</b>\n\n"
+        f"Пользователь: {client_name}{username_str} (ID: {user.id})\n"
+        f"Возраст: {client_age}\n"
+        f"Родитель: {html.escape(parent_name)}\n"
+        f"Телефон родителя: {html.escape(parent_phone)}"
+    )
+
+    async with AsyncSessionFactory() as session:
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        all_admins = set(settings.admin_telegram_ids) | set(db_admins)
+
+    for admin_id in all_admins:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=msg_text,
+                parse_mode="HTML"
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить оповещение о несовершеннолетнем админу %s: %s", admin_id, exc)
+
+
 async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update, context)
     query = update.callback_query
@@ -320,10 +392,14 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             reply_markup=build_service_menu(),
         )
     elif data == "support":
-        await query.edit_message_text(
-            "Мы откроем тикет поддержки. Пожалуйста, напишите ваш вопрос.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="back:main")]]),
-        )
+        # Требование (б) — мгновенно открываем тикет и уведомляем администраторов
+        from handlers.chat_bridge import create_support_ticket
+        await query.answer()
+        try:
+            await query.delete_message()
+        except Exception:
+            pass
+        await create_support_ticket(update, context)
     elif data == "healing":
         # Проверяем доступ к инструкции по заживлению через базу данных
         async with AsyncSessionFactory() as session:
@@ -435,6 +511,13 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["parent_phone"] = text
         context.user_data.setdefault("history", []).append("await_parent_phone")
 
+        # Требование (в) — Ввод информации о несовершеннолетнем завершен. Оповещаем администраторов
+        client_age = context.user_data.get("client_age", 0)
+        parent_name = context.user_data.get("parent_name", "Не указано")
+        parent_phone = text
+
+        await notify_admins_about_minor(update, context, client_age, parent_name, parent_phone)
+
         if context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]:
             next_state = "medical_question_1"
         else:
@@ -524,6 +607,28 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             answer = data.split(":", 1)[1]
             
             context.user_data.setdefault("medical_answers", {})
+            
+            # Требование (а) — Прерывание при заболевании крови
+            if q_num == 1 and answer == "yes":
+                await notify_admins_about_blood_disease(update, context)
+
+                # Полная очистка временного состояния сессии
+                for key in [
+                    "booking_state", "client_name", "client_phone", "client_age",
+                    "parent_name", "parent_phone", "medical_answers", "selected_service",
+                    "requested_date", "last_checked_date", "history", "admin_state",
+                    "temp_latitude", "temp_longitude"
+                ]:
+                    context.user_data.pop(key, None)
+
+                # Вывод сообщения пользователю и возврат в главное меню
+                text = (
+                    "К сожалению, мы не сможем записать вас на прием, "
+                    "так как мастер не работает с клиентами, имеющими заболевания крови.\n"
+                    "Приносим извинения за неудобства."
+                )
+                await query.edit_message_text(text, reply_markup=build_main_menu())
+                return
             
             if answer in ["yes", "bad"]:
                 context.user_data.setdefault("history", []).append(q_state)
@@ -649,7 +754,17 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             )
 
         if update.effective_chat is not None:
-            await update.effective_chat.send_message(booking_message)
+            send_kwargs = {"text": booking_message}
+            if getattr(update.effective_chat, "is_direct_messages", False):
+                topic_id = None
+                if update.effective_message:
+                    if update.effective_message.direct_messages_topic:
+                        topic_id = update.effective_message.direct_messages_topic.topic_id
+                    elif update.effective_message.message_thread_id:
+                        topic_id = update.effective_message.message_thread_id
+                if topic_id:
+                    send_kwargs["direct_messages_topic_id"] = topic_id
+            await update.effective_chat.send_message(**send_kwargs)
 
         # Полная очистка временного состояния
         context.user_data.pop("booking_state", None)
