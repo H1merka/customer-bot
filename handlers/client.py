@@ -683,7 +683,7 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 chronic_disease=context.user_data.get("medical_answers", {}).get("chronic_disease"),
                 healing_issues=context.user_data.get("medical_answers", {}).get("healing_issues"),
                 skin_disease=context.user_data.get("medical_answers", {}).get("skin_disease"),
-                date_time=slot_dt,
+                date_time=slot_dt.replace(tzinfo=None),
                 status=BookingStatus.CONFIRMED,
             )
             session.add(booking)

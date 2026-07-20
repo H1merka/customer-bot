@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from telegram.ext import Application
 
@@ -16,9 +16,11 @@ settings = get_settings()
 
 async def send_24h_reminders(app: Application) -> None:
     async with AsyncSessionFactory() as session:
-        now = datetime.utcnow()
-        window_start = now + timedelta(hours=23, minutes=50)
-        window_end = now + timedelta(hours=24, minutes=10)
+        local_tz = timezone(timedelta(hours=5))
+        now_local = datetime.now(local_tz).replace(tzinfo=None)
+        
+        window_start = now_local + timedelta(hours=23, minutes=50)
+        window_end = now_local + timedelta(hours=24, minutes=10)
 
         bookings = await session.scalars(
             select(Booking)
@@ -34,7 +36,7 @@ async def send_24h_reminders(app: Application) -> None:
                     chat_id=booking.user_id,
                     text=(
                         f"Напоминание: ваша запись на {booking.date_time.strftime('%d.%m.%Y %H:%M')}"
-                        f" ожидается. Пожалуйста, arrive заранее."
+                        f" ожидается. Пожалуйста, приходите заранее."
                     ),
                 )
             except Exception as exc:  # noqa: BLE001

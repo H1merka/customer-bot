@@ -212,3 +212,6 @@ AGENTS.md
 
 # Google credentials
 google_creds.json
+
+# Media dir
+images/
