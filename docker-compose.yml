@@ -1,17 +1,19 @@
 services:
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: customer_bot
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-customer_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d customer_bot"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-customer_bot}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
       - bot-network
 
@@ -22,24 +24,24 @@ services:
     env_file:
       - .env
     environment:
-      BOT_TOKEN: ${BOT_TOKEN:-}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/customer_bot}
-      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/google_creds.json}
-      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-customer_bot}}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/google_creds.json
     depends_on:
       db:
         condition: service_healthy
-    restart: always
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
-      - ./logs:/app/logs
+      - bot-logs:/app/logs
       - ./google_creds.json:/app/google_creds.json:ro
     networks:
       - bot-network
 
 volumes:
   pgdata:
+  bot-logs:
 
 networks:
   bot-network:
