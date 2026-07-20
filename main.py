@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import logging
@@ -16,7 +17,7 @@ from telegram.ext import (
 
 from config.settings import get_settings
 from database.connection import init_db
-from handlers.admin import grant_healing_access, revoke_healing_access, set_location, settings_command
+from handlers.admin import admin_handlers, settings_command, grant_healing_access
 from handlers.chat_bridge import (
     accept_support_ticket,
     create_support_ticket,
@@ -58,8 +59,6 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("settings", settings_command))
     application.add_handler(CommandHandler("grant_access", grant_healing_access))
-    application.add_handler(CommandHandler("revoke_access", revoke_healing_access))
-    application.add_handler(CommandHandler("set_location", set_location))
     application.add_handler(CommandHandler("support", create_support_ticket))
     application.add_handler(CommandHandler("accept", accept_support_ticket))
     
@@ -67,10 +66,14 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("close", close_support_ticket))
     application.add_handler(CommandHandler("close_support", close_support_ticket))
     
-    # Callback-обработчики
+    # Callback-обработчики поддержки
     application.add_handler(CallbackQueryHandler(handle_support_callback, pattern=r"^(accept_support|close_support)$"))
     application.add_handler(CallbackQueryHandler(handle_channel_start, pattern=r"^channel$"))
     
+    # Регистрация сценария администратора
+    for handler in admin_handlers:
+        application.add_handler(handler)
+
     # Регистрация сценария клиента
     for handler in client_handlers:
         application.add_handler(handler)

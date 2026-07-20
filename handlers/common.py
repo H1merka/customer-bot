@@ -1,3 +1,4 @@
+# handlers/common.py
 from __future__ import annotations
 
 from typing import Any
@@ -39,7 +40,18 @@ def build_main_menu() -> InlineKeyboardMarkup:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update, context)
-    if update.effective_message is None:
+    if update.effective_message is None or update.effective_user is None:
+        return
+
+    # Импортируем внутри функции во избежание круговых импортов
+    from handlers.admin import check_if_admin, build_admin_main_menu
+
+    if await check_if_admin(update.effective_user.id):
+        text = (
+            "Добро пожаловать в административный интерфейс студии пирсинга.\n"
+            "Выберите действие ниже."
+        )
+        await update.effective_message.reply_text(text, reply_markup=build_admin_main_menu())
         return
 
     text = (

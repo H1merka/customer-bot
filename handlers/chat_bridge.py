@@ -1,3 +1,4 @@
+# handlers/chat_bridge.py
 from __future__ import annotations
 
 import logging
@@ -6,7 +7,7 @@ from telegram.ext import ContextTypes, ApplicationHandlerStop
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
-from database.models import SupportTicket, SupportTicketStatus
+from database.models import SupportTicket, SupportTicketStatus, User, UserRole
 from sqlalchemy import select
 from handlers.common import build_main_menu
 
@@ -15,9 +16,6 @@ settings = get_settings()
 
 
 def get_client_id_from_update(update: Update) -> int | None:
-    """
-    Определяет Telegram ID клиента в monoforum-топике или в личном сообщении.
-    """
     if update.effective_message:
         if update.effective_message.direct_messages_topic:
             return update.effective_message.direct_messages_topic.user.id
@@ -27,18 +25,14 @@ def get_client_id_from_update(update: Update) -> int | None:
 
 
 async def restrict_to_channel_dms(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Разрешает обычным клиентам использовать бота исключительно в monoforum.
-    Для администраторов сделано исключение — они могут писать боту в ЛС.
-    """
     if update.effective_chat is None or update.effective_user is None:
         return
 
-    # Администраторам разрешено взаимодействовать с ботом в приватных сообщениях
-    if update.effective_user.id in settings.admin_telegram_ids:
+    from handlers.admin import check_if_admin
+
+    if await check_if_admin(update.effective_user.id):
         return
 
-    # Запрет личных сообщений для клиентов
     if update.effective_chat.type == "private":
         if update.callback_query:
             await update.callback_query.answer("Запись происходит только через канал.", show_alert=True)
@@ -53,16 +47,11 @@ async def restrict_to_channel_dms(update: Update, context: ContextTypes.DEFAULT_
             )
         raise ApplicationHandlerStop()
 
-    # Если это группа/супергруппа, но не monoforum чата канала — полностью игнорируем
     if not getattr(update.effective_chat, "is_direct_messages", False):
         raise ApplicationHandlerStop()
 
 
 async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Если тикет поддержки открыт, бот молчит для всех сообщений в теме,
-    кроме администратора, который отправляет команду /close, /close_support или кликает 'Закрыть диалог'.
-    """
     if update.effective_chat is None or update.effective_user is None:
         return
 
@@ -82,7 +71,8 @@ async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.
         )
 
     if ticket is not None:
-        is_admin = update.effective_user.id in settings.admin_telegram_ids
+        from handlers.admin import check_if_admin
+        is_admin_user = await check_if_admin(update.effective_user.id)
         
         is_close_command = False
         if update.effective_message and update.effective_message.text:
@@ -94,20 +84,15 @@ async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.
         if update.callback_query and update.callback_query.data == "close_support":
             is_close_callback = True
 
-        if is_admin and (is_close_command or is_close_callback):
-            # Позволяем обработчикам закрытия сработать штатно
+        if is_admin_user and (is_close_command or is_close_callback):
             return
 
-        # Игнорируем любые автоответы, чтобы дать админу и клиенту общаться лично
         if update.callback_query:
             await update.callback_query.answer("Диалог с поддержкой активен.")
         raise ApplicationHandlerStop()
 
 
 async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Регистрирует обращение в БД, рассылает уведомления админам со ссылкой на топик в monoforum.
-    """
     if update.effective_user is None or update.effective_message is None or update.effective_chat is None:
         return
 
@@ -128,9 +113,13 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             existing.status = SupportTicketStatus.OPEN
             existing.assigned_admin_id = None
+        
+        # Получаем список динамических администраторов из БД и объединяем с .env
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        all_admins = set(settings.admin_telegram_ids) | set(db_admins)
+        
         await session.commit()
 
-    # Генерация прямой ссылки на конкретную тему (топик) с клиентом
     chat_id_str = str(update.effective_chat.id)
     if chat_id_str.startswith("-100"):
         chat_id_clean = chat_id_str[4:]
@@ -143,8 +132,7 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         topic_link = "не удалось сгенерировать ссылку"
 
-    # Рассылка приватного уведомления админам
-    for admin_id in settings.admin_telegram_ids:
+    for admin_id in all_admins:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
@@ -173,13 +161,12 @@ async def accept_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Закрывает тикет поддержки админом из monoforum через команду /close или /close_support.
-    """
     if update.effective_chat is None or update.effective_user is None or update.effective_message is None:
         return
 
-    if update.effective_user.id not in settings.admin_telegram_ids:
+    from handlers.admin import check_if_admin
+
+    if not await check_if_admin(update.effective_user.id):
         return
 
     client_id = get_client_id_from_update(update)
