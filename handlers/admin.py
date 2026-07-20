@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters, ApplicationHandlerStop
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
@@ -198,7 +198,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "Пожалуйста, введите корректный числовой Telegram ID пользователя.",
                 reply_markup=build_admin_cancel_button()
             )
-            return
+            raise ApplicationHandlerStop()
 
         async with AsyncSessionFactory() as session:
             user = await session.scalar(select(User).where(User.telegram_id == target_id))
@@ -230,7 +230,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             success_text + "\n\nВозврат в меню настроек.",
             reply_markup=build_admin_settings_menu()
         )
-        return
+        raise ApplicationHandlerStop()
 
     if admin_state == "await_address":
         latitude = context.user_data.pop("temp_latitude", None)
@@ -242,7 +242,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 reply_markup=build_admin_settings_menu()
             )
             context.user_data.pop("admin_state", None)
-            return
+            raise ApplicationHandlerStop()
 
         async with AsyncSessionFactory() as session:
             for key, val in [("latitude", str(latitude)), ("longitude", str(longitude)), ("address_text", text)]:
@@ -258,7 +258,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Геолокация и текстовый адрес студии успешно обновлены.\n\nВозврат в меню настроек.",
             reply_markup=build_admin_settings_menu()
         )
-        return
+        raise ApplicationHandlerStop()
 
 
 async def handle_admin_location_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -281,6 +281,7 @@ async def handle_admin_location_input(update: Update, context: ContextTypes.DEFA
         "Координаты зафиксированы. Теперь введите текстовый адрес студии:",
         reply_markup=build_admin_cancel_button()
     )
+    raise ApplicationHandlerStop()
 
 
 admin_handlers = [

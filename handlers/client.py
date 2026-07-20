@@ -379,11 +379,15 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
     if context.user_data.get("admin_state"):
         return
 
+    text = update.effective_message.text.strip()
+
+    # Защита: игнорируем ввод кнопок смены меню на этапе заполнения
+    if text in ["Старт", "В начало"]:
+        return
+
     state = context.user_data.get("booking_state")
     if not state:
         return
-
-    text = update.effective_message.text.strip()
 
     if state == "await_name":
         context.user_data["client_name"] = text

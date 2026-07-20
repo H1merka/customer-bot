@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import html  # Стандартная библиотека для экранирования HTML
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ApplicationHandlerStop
 
@@ -97,7 +98,8 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     client_id = update.effective_user.id
-    client_name = update.effective_user.full_name or "Unknown"
+    # Безопасное экранирование имени во избежание сбоев парсинга разметки
+    client_name = html.escape(update.effective_user.full_name or "Unknown")
 
     async with AsyncSessionFactory() as session:
         existing = await session.scalar(
@@ -127,21 +129,23 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         chat_id_clean = chat_id_str
 
     thread_id = update.effective_message.message_thread_id
+    # Безопасное формирование текста в зависимости от наличия ID треда
     if thread_id:
         topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
+        discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
     else:
-        topic_link = "не удалось сгенерировать ссылку"
+        discussion_text = "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
 
     for admin_id in all_admins:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"⚠️ **Новый запрос поддержки!**\n\n"
+                    f"⚠️ <b>Новый запрос поддержки!</b>\n\n"
                     f"Клиент: {client_name} (ID: {client_id})\n"
-                    f"Тема в сообщениях канала: [Перейти к обсуждению]({topic_link})"
+                    f"{discussion_text}"
                 ),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception as exc:
             logger.warning("Не удалось отправить оповещение админу %s: %s", admin_id, exc)

@@ -12,7 +12,9 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
-    TypeHandler
+    MessageHandler,  # Добавлен импорт MessageHandler
+    TypeHandler,
+    filters          # Добавлен импорт filters
 )
 
 from config.settings import get_settings
@@ -54,29 +56,35 @@ def build_application() -> Application:
     application.add_handler(TypeHandler(Update, restrict_to_channel_dms), group=-2)
     application.add_handler(TypeHandler(Update, handle_silent_mode_and_commands), group=-1)
 
-    # Административные и базовые команды
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("grant_access", grant_healing_access))
-    application.add_handler(CommandHandler("support", create_support_ticket))
-    application.add_handler(CommandHandler("accept", accept_support_ticket))
-    
-    # Команды закрытия тикета поддержки администратором в monoforum
-    application.add_handler(CommandHandler("close", close_support_ticket))
-    application.add_handler(CommandHandler("close_support", close_support_ticket))
-    
-    # Callback-обработчики поддержки
-    application.add_handler(CallbackQueryHandler(handle_support_callback, pattern=r"^(accept_support|close_support)$"))
-    application.add_handler(CallbackQueryHandler(handle_channel_start, pattern=r"^channel$"))
-    
-    # Регистрация сценария администратора
-    for handler in admin_handlers:
-        application.add_handler(handler)
+    # Обработка нажатий на статические Reply-кнопки "Старт" и "В начало" (Group 0)
+    application.add_handler(
+        MessageHandler(filters.TEXT & filters.Regex("^(Старт|В начало)$"), start_command),
+        group=0
+    )
 
-    # Регистрация сценария клиента
+    # Административные и базовые команды (Group 0)
+    application.add_handler(CommandHandler("start", start_command), group=0)
+    application.add_handler(CommandHandler("help", help_command), group=0)
+    application.add_handler(CommandHandler("settings", settings_command), group=0)
+    application.add_handler(CommandHandler("grant_access", grant_healing_access), group=0)
+    application.add_handler(CommandHandler("support", create_support_ticket), group=0)
+    application.add_handler(CommandHandler("accept", accept_support_ticket), group=0)
+    
+    # Команды закрытия тикета поддержки администратором в monoforum (Group 0)
+    application.add_handler(CommandHandler("close", close_support_ticket), group=0)
+    application.add_handler(CommandHandler("close_support", close_support_ticket), group=0)
+    
+    # Callback-обработчики поддержки (Group 0)
+    application.add_handler(CallbackQueryHandler(handle_support_callback, pattern=r"^(accept_support|close_support)$"), group=0)
+    application.add_handler(CallbackQueryHandler(handle_channel_start, pattern=r"^channel$"), group=0)
+    
+    # Регистрация сценария администратора в группе приоритета 1 (Group 1)
+    for handler in admin_handlers:
+        application.add_handler(handler, group=1)
+
+    # Регистрация сценария клиента в группе приоритета 2 (Group 2)
     for handler in client_handlers:
-        application.add_handler(handler)
+        application.add_handler(handler, group=2)
 
     return application
 
