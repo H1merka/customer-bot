@@ -11,7 +11,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, fil
 
 from config.settings import get_settings, BASE_DIR
 from database.connection import AsyncSessionFactory
-from database.models import Booking, BookingStatus, StudioSetting, User, UserRole
+from database.models import Booking, BookingStatus, StudioSetting, User
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
 from sqlalchemy import select
@@ -26,6 +26,18 @@ SERVICE_OPTIONS = {
     "consultation": "Консультация",
     "jewelry": "Покупка украшения",
     "anodizing": "Анодирование титана",
+}
+
+# Наборы услуг для определения логики флоу
+SERVICES_WITH_ZONE = {
+    SERVICE_OPTIONS["piercing"],
+    SERVICE_OPTIONS["apsize"],
+    SERVICE_OPTIONS["downsize"]
+}
+
+SERVICES_WITH_MEDICAL = {
+    SERVICE_OPTIONS["piercing"],
+    SERVICE_OPTIONS["consultation"]
 }
 
 PIERCING_ZONES = {
@@ -252,7 +264,7 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup = build_piercing_zone_menu()
     elif state_name == "await_name":
         selected_service = context.user_data.get("selected_service")
-        if selected_service == SERVICE_OPTIONS["piercing"]:
+        if selected_service in SERVICES_WITH_ZONE:
             zone_name = context.user_data.get("temp_piercing_zone_name", "Не указано")
             type_name = context.user_data.get("temp_piercing_type", "Не указано")
             text = f"Вы выбрали: {selected_service} ({zone_name} — {type_name}).\n\nВведите ваше ФИО."
@@ -298,12 +310,12 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
             await transition_to_state(update, context, "await_date", edit_message=edit_message)
         return
 
-    is_piercing_proceed = (
+    is_zone_flow_proceed = (
         state_name == "await_name" 
-        and context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]
+        and context.user_data.get("selected_service") in SERVICES_WITH_ZONE
     )
 
-    if edit_message and update.callback_query and not is_piercing_proceed:
+    if edit_message and update.callback_query and not is_zone_flow_proceed:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
         except Exception:
@@ -313,7 +325,7 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 await update.effective_message.reply_text(text, reply_markup=reply_markup)
     else:
-        if update.callback_query and not is_piercing_proceed:
+        if update.callback_query and not is_zone_flow_proceed:
             try:
                 await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
             except Exception:
@@ -407,7 +419,7 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif current_state == "await_name":
         context.user_data.pop("client_name", None)
-        if context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]:
+        if context.user_data.get("selected_service") in SERVICES_WITH_ZONE:
             query = update.callback_query
             if query:
                 try:
@@ -486,8 +498,10 @@ async def get_free_slots_for_date(calendar_service: GoogleCalendarService, targe
     local_tz = timezone(timedelta(hours=5))
     busy_intervals = await calendar_service.get_busy_intervals(target_date)
 
-    working_hours = ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00"]
-    slot_duration = timedelta(hours=1, minutes=30)
+    # Шаг 2а: Сетка слотов начинается с 14.00, заканчивается (старт последнего слота) в 20.00
+    # Длительность слота: 1 час. Интервал (перерыв): 1 час.
+    working_hours = ["14:00", "16:00", "18:00", "20:00"]
+    slot_duration = timedelta(hours=1)
 
     free_slots = []
     now = datetime.now(timezone.utc)
@@ -591,7 +605,7 @@ async def notify_admins_about_blood_disease(update: Update, context: ContextType
     )
 
     async with AsyncSessionFactory() as session:
-        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == "admin"))
         all_admins = set(settings.admin_telegram_ids) | set(db_admins)
 
     for admin_id in all_admins:
@@ -601,7 +615,7 @@ async def notify_admins_about_blood_disease(update: Update, context: ContextType
                 text=msg_text,
             )
         except Exception as exc:
-            logger.warning("Не удалось отправить оповещение о заболевании крови админу %s: %s", admin_id, exc)
+            logger.warning("Не удалось отправить оповещение о заблевании крови админу %s: %s", admin_id, exc)
 
 
 async def notify_admins_about_minor(
@@ -628,7 +642,7 @@ async def notify_admins_about_minor(
     )
 
     async with AsyncSessionFactory() as session:
-        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == "admin"))
         all_admins = set(settings.admin_telegram_ids) | set(db_admins)
 
     for admin_id in all_admins:
@@ -712,7 +726,8 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["selected_service"] = service_name
     context.user_data["history"] = ["service_selection"]
 
-    if service_key == "piercing":
+    # Шаг 2в: Апсайз и Даунсайз теперь переходят к выбору зоны пирсинга
+    if service_key in ["piercing", "apsize", "downsize"]:
         await transition_to_state(update, context, "piercing_zone_selection", edit_message=True)
     else:
         await transition_to_state(update, context, "await_name", edit_message=True)
@@ -848,7 +863,9 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         if age < 18:
             next_state = "await_parent_name"
         else:
-            if context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]:
+            # Шаг 2б и 2в: "Прокол" и "Консультация" идут на мед. вопросы.
+            # "Апсайз" и "Даунсайз" идут сразу на выбор даты (медицинские вопросы не нужны)
+            if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
                 next_state = "medical_question_1"
             else:
                 next_state = "await_date"
@@ -872,7 +889,9 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await notify_admins_about_minor(update, context, client_age, parent_name, parent_phone)
 
-        if context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]:
+        # Шаг 2б и 2в: "Прокол" и "Консультация" идут на мед. вопросы.
+        # "Апсайз" и "Даунсайз" идут сразу на выбор даты
+        if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
             next_state = "medical_question_1"
         else:
             next_state = "await_date"
@@ -1057,7 +1076,8 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             await session.commit()
             await session.refresh(booking)
 
-            end_dt = slot_dt + timedelta(hours=1, minutes=30)
+            # Шаг 2а: Время окончания события вычисляется с учетом 1 часа длительности
+            end_dt = slot_dt + timedelta(hours=1)
             
             desc_lines = [
                 f"Клиент: {booking.client_name}",

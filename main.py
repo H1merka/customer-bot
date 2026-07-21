@@ -30,10 +30,10 @@ from handlers.chat_bridge import (
 )
 from handlers.client import client_handlers
 from handlers.common import help_command, handle_channel_start, start_command
-from jobs import send_24h_reminders  # Импорт фоновой задачи
+from scheduler.jobs import send_24h_reminders  # Импорт фоновой задачи
 
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(getattr(logging, log_level, logging.INFO)), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
