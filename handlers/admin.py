@@ -51,6 +51,7 @@ def build_admin_help_menu() -> InlineKeyboardMarkup:
 def build_admin_settings_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("Выдать доступ к заживлению", callback_data="admin_setting:grant_healing")],
+        [InlineKeyboardButton("Обновить текст инструкции по заживлению", callback_data="admin_setting:update_healing")],
         [InlineKeyboardButton("Добавить админа", callback_data="admin_setting:add_admin")],
         [InlineKeyboardButton("Отозвать права админа", callback_data="admin_setting:revoke_admin")],
         [InlineKeyboardButton("Изменить адрес и геолокацию", callback_data="admin_setting:set_location")],
@@ -157,6 +158,12 @@ async def handle_admin_setting_callback(update: Update, context: ContextTypes.DE
             "Введите Telegram ID пользователя, которому хотите выдать доступ к инструкции по заживлению:",
             reply_markup=build_admin_cancel_button()
         )
+    elif setting_action == "update_healing":
+        context.user_data["admin_state"] = "await_healing_instructions_text"
+        await query.edit_message_text(
+            "Введите новый текст инструкции по заживлению (будет сохранен как обычный текст):",
+            reply_markup=build_admin_cancel_button()
+        )
     elif setting_action == "add_admin":
         context.user_data["admin_state"] = "await_userid_add_admin"
         await query.edit_message_text(
@@ -231,6 +238,24 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=build_admin_settings_menu()
         )
         raise ApplicationHandlerStop()
+
+    # --- НАЧАЛО НОВОГО БЛОКА ОБРАБОТКИ ---
+    if admin_state == "await_healing_instructions_text":
+        async with AsyncSessionFactory() as session:
+            setting = await session.get(StudioSetting, "healing_instructions")
+            if setting:
+                setting.value = text
+            else:
+                session.add(StudioSetting(key="healing_instructions", value=text))
+            await session.commit()
+
+        context.user_data.pop("admin_state", None)
+        await update.effective_message.reply_text(
+            "Текст инструкции по заживлению успешно обновлен.\n\nВозврат в меню настроек.",
+            reply_markup=build_admin_settings_menu()
+        )
+        raise ApplicationHandlerStop()
+    # --- КОНЕЦ НОВОГО БЛОКА ОБРАБОТКИ ---
 
     if admin_state == "await_address":
         latitude = context.user_data.pop("temp_latitude", None)

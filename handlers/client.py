@@ -1,7 +1,7 @@
 # handlers/client.py
 from __future__ import annotations
 
-import html  # Безопасное форматирование HTML-разметки
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -28,7 +28,6 @@ SERVICE_OPTIONS = {
     "anodizing": "Анодирование титана",
 }
 
-# Структура зон и типов пирсинга с указанием медиафайлов
 PIERCING_ZONES = {
     "mouth": {
         "name": "Губы/рот",
@@ -55,7 +54,7 @@ PIERCING_ZONES = {
     },
     "body": {
         "name": "Тело",
-        "image": None,  # Без изображения согласно требованиям
+        "image": None,
         "types": [
             "Соски"
         ]
@@ -132,11 +131,6 @@ MEDICAL_QUESTIONS = {
 
 
 def get_send_kwargs(update: Update, text: str, reply_markup: Any = None) -> dict[str, Any]:
-    """
-    Формирует аргументы для безопасной отправки текстового сообщения.
-    Автоматически учитывает темы (topics) для каналов с включенными Direct Messages
-    и форумов (message_thread_id).
-    """
     send_kwargs: dict[str, Any] = {
         "text": text,
     }
@@ -164,11 +158,6 @@ def get_send_kwargs(update: Update, text: str, reply_markup: Any = None) -> dict
 
 
 def get_photo_send_kwargs(update: Update, photo: Any, caption: str, reply_markup: Any = None) -> dict[str, Any]:
-    """
-    Формирует аргументы для безопасной отправки сообщения с фотографией.
-    Автоматически учитывает темы (topics) для каналов с включенными Direct Messages
-    и форумов (message_thread_id).
-    """
     send_kwargs: dict[str, Any] = {
         "photo": photo,
         "caption": caption,
@@ -211,7 +200,6 @@ def build_service_menu() -> InlineKeyboardMarkup:
 
 
 def build_piercing_zone_menu() -> InlineKeyboardMarkup:
-    """Генерация меню выбора зон пирсинга (всего 5 кнопок с кнопкой Назад)"""
     keyboard = [
         [InlineKeyboardButton("Губы/рот", callback_data="p_zone:mouth")],
         [InlineKeyboardButton("Нос/лицо", callback_data="p_zone:face")],
@@ -223,14 +211,12 @@ def build_piercing_zone_menu() -> InlineKeyboardMarkup:
 
 
 def build_piercing_types_menu(zone_key: str) -> InlineKeyboardMarkup:
-    """Генерация меню конкретных проколов для выбранной зоны"""
     zone_info = PIERCING_ZONES.get(zone_key)
     if not zone_info:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="booking_back")]])
 
     keyboard = []
     for i, type_name in enumerate(zone_info["types"], 1):
-        # Префикс с цифрой добавляется для всех зон, кроме Тела (Соски)
         btn_text = type_name if zone_key == "body" else f"{i}. {type_name}"
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"p_type:{zone_key}:{type_name}")])
 
@@ -266,7 +252,6 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup = build_piercing_zone_menu()
     elif state_name == "await_name":
         selected_service = context.user_data.get("selected_service")
-        # Если выбран пирсинг, выводим расширенную конфигурацию (Требование 5)
         if selected_service == SERVICE_OPTIONS["piercing"]:
             zone_name = context.user_data.get("temp_piercing_zone_name", "Не указано")
             type_name = context.user_data.get("temp_piercing_type", "Не указано")
@@ -313,8 +298,6 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
             await transition_to_state(update, context, "await_date", edit_message=edit_message)
         return
 
-    # Флаг определяет переход к вводу имени сразу после успешного выбора пирсинга,
-    # когда все предыдущие вспомогательные сообщения были полностью удалены.
     is_piercing_proceed = (
         state_name == "await_name" 
         and context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]
@@ -360,7 +343,6 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_state = context.user_data.get("booking_state")
     prev_state = history.pop()
 
-    # Если мы возвращаемся ИЗ выбора типа пирсинга В выбор зон пирсинга
     if current_state == "piercing_type_selection":
         context.user_data.pop("temp_piercing_zone_key", None)
         context.user_data.pop("temp_piercing_zone_name", None)
@@ -683,19 +665,26 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
     elif data == "healing":
         async with AsyncSessionFactory() as session:
             user = await session.scalar(select(User).where(User.telegram_id == query.from_user.id))
+            setting = await session.get(StudioSetting, "healing_instructions")
         
         if user and user.has_healing_access:
-            healing_text = (
-                "✨ **Инструкция по заживлению пирсинга** ✨\n\n"
-                "1. Не трогайте прокол руками.\n"
-                "2. Обрабатывайте физраствором 2-3 раза в день.\n"
-                "3. Избегайте саун, бассейнов и открытых водоемов первые 2-4 недели.\n"
-                "4. Не проворачивайте украшение."
-            )
+            if setting and setting.value:
+                healing_text = setting.value
+                parse_mode = None
+            else:
+                healing_text = (
+                    "✨ **Инструкция по заживлению пирсинга** ✨\n\n"
+                    "1. Не трогайте прокол руками.\n"
+                    "2. Обрабатывайте физраствором 2-3 раза в день.\n"
+                    "3. Избегайте саун, бассейнов и открытых водоемов первые 2-4 недели.\n"
+                    "4. Не проворачивайте украшение."
+                )
+                parse_mode = "Markdown"
+
             await query.edit_message_text(
                 healing_text,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="back:main")]]),
-                parse_mode="Markdown"
+                parse_mode=parse_mode
             )
         else:
             await query.edit_message_text(
@@ -723,7 +712,6 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["selected_service"] = service_name
     context.user_data["history"] = ["service_selection"]
 
-    # Если выбран "Пирсинг", перенаправляем на выбор зон пирсинга, иначе сразу к вводу ФИО
     if service_key == "piercing":
         await transition_to_state(update, context, "piercing_zone_selection", edit_message=True)
     else:
@@ -731,7 +719,6 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
 
 
 async def handle_zone_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик выбора зоны пирсинга."""
     query = update.callback_query
     if query is None:
         return
@@ -747,7 +734,6 @@ async def handle_zone_selection_callback(update: Update, context: ContextTypes.D
     context.user_data["zone_menu_message_id"] = query.message.message_id
 
     if zone_info["image"]:
-        # Вариант Б: Оставляем старое текстовое сообщение нетронутым, но отключаем инлайн-кнопки во избежание дабл-кликов
         await query.edit_message_text(
             f"Выбрана зона: {zone_info['name']}. Выберите тип прокола на картинке ниже.",
             reply_markup=None
@@ -777,7 +763,6 @@ async def handle_zone_selection_callback(update: Update, context: ContextTypes.D
             context.user_data["photo_message_id"] = photo_msg.message_id
         context.user_data["booking_state"] = "piercing_type_selection"
     else:
-        # Для зоны "Тело" (без изображения) просто редактируем текущее сообщение на список проколов
         await query.edit_message_text(
             text=f"Выберите тип прокола для зоны {zone_info['name']}:",
             reply_markup=build_piercing_types_menu(zone_key)
@@ -786,7 +771,6 @@ async def handle_zone_selection_callback(update: Update, context: ContextTypes.D
 
 
 async def handle_type_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик выбора конкретного типа прокола."""
     query = update.callback_query
     if query is None:
         return
@@ -797,12 +781,9 @@ async def handle_type_selection_callback(update: Update, context: ContextTypes.D
     context.user_data["temp_piercing_type"] = type_name
     context.user_data.setdefault("history", []).append("piercing_type_selection")
 
-    # Получаем сохраненные ID сообщений для аккуратного удаления
     photo_msg_id = context.user_data.pop("photo_message_id", None)
     zone_menu_msg_id = context.user_data.pop("zone_menu_message_id", None)
 
-    # 1. Удаляем текстовый плейсхолдер меню зон (если он есть)
-    # Делаем проверку, чтобы избежать двойного удаления для "Тела" (где плейсхолдер совпадает с сообщением коллбэка)
     if zone_menu_msg_id and (not query.message or zone_menu_msg_id != query.message.message_id):
         if update.effective_chat:
             try:
@@ -810,12 +791,10 @@ async def handle_type_selection_callback(update: Update, context: ContextTypes.D
             except Exception as e:
                 logger.warning("Не удалось удалить плейсхолдер меню на шаге ФИО: %s", e)
 
-    # 2. Удаляем сообщение с фотографией (которое и вызвало этот callback) напрямую
     try:
         await query.message.delete()
     except Exception as e:
         logger.warning("Не удалось удалить сообщение с фото через query.message.delete(): %s", e)
-        # Если прямое удаление завершилось ошибкой, пробуем по сохраненному ID
         if photo_msg_id and update.effective_chat:
             try:
                 await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=photo_msg_id)
@@ -986,7 +965,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             if q_num == 1 and answer == "yes":
                 await notify_admins_about_blood_disease(update, context)
 
-                # Полная очистка временного состояния сессии
                 for key in [
                     "booking_state", "client_name", "client_phone", "client_age",
                     "parent_name", "parent_phone", "medical_answers", "selected_service",
@@ -1037,6 +1015,15 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
         if update.effective_user is None:
             return
 
+        # Идентификация чата и топика Сообщений Канала (Channel Direct Messages)
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        direct_messages_topic_id = None
+        if update.effective_message:
+            if getattr(update.effective_message, "direct_messages_topic", None):
+                direct_messages_topic_id = update.effective_message.direct_messages_topic.topic_id
+            elif update.effective_message.message_thread_id:
+                direct_messages_topic_id = update.effective_message.message_thread_id
+
         async with AsyncSessionFactory() as session:
             user = await session.scalar(select(User).where(User.telegram_id == update.effective_user.id))
             if user is None:
@@ -1049,7 +1036,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 client_phone=context.user_data.get("client_phone", ""),
                 client_age=context.user_data.get("client_age", 0),
                 service_name=context.user_data.get("selected_service", "Unknown"),
-                # Добавляем сохранение выбранных зон и типов пирсинга в БД
                 piercing_zone=context.user_data.get("temp_piercing_zone_name"),
                 piercing_type=context.user_data.get("temp_piercing_type"),
                 parent_name=context.user_data.get("parent_name"),
@@ -1063,6 +1049,9 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 skin_disease=context.user_data.get("medical_answers", {}).get("skin_disease"),
                 date_time=slot_dt.replace(tzinfo=None),
                 status=BookingStatus.CONFIRMED,
+                # Сохраняем связующие параметры чата Сообщений Канала
+                chat_id=chat_id,
+                direct_messages_topic_id=direct_messages_topic_id,
             )
             session.add(booking)
             await session.commit()
@@ -1139,7 +1128,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             booking_kwargs = get_send_kwargs(update, booking_message)
             await update.effective_chat.send_message(**booking_kwargs)
 
-        # Полная очистка временного состояния
         for key in [
             "booking_state", "client_name", "client_phone", "client_age",
             "parent_name", "parent_phone", "medical_answers", "selected_service",

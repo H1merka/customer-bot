@@ -11,7 +11,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -76,6 +75,10 @@ class Booking(Base):
     google_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[BookingStatus] = mapped_column(default=BookingStatus.PENDING)
+
+    # Новые поля для таргетированной отправки сообщений в топик канала (Channel DM)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    direct_messages_topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="bookings")
 

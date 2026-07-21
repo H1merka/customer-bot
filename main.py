@@ -12,9 +12,9 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
-    MessageHandler,  # Добавлен импорт MessageHandler
+    MessageHandler,
     TypeHandler,
-    filters          # Добавлен импорт filters
+    filters
 )
 
 from config.settings import get_settings
@@ -30,9 +30,10 @@ from handlers.chat_bridge import (
 )
 from handlers.client import client_handlers
 from handlers.common import help_command, handle_channel_start, start_command
+from jobs import send_24h_reminders  # Импорт фоновой задачи
 
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(level=getattr(getattr(logging, log_level, logging.INFO)), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +86,14 @@ def build_application() -> Application:
     # Регистрация сценария клиента в группе приоритета 2 (Group 2)
     for handler in client_handlers:
         application.add_handler(handler, group=2)
+
+    # Регистрация циклического фонового задания отправки напоминаний за 24 часа в планировщике
+    if application.job_queue:
+        # Проверяем записи каждые 5 минут (300 сек). Первый запуск через 10 секунд после старта.
+        application.job_queue.run_repeating(send_24h_reminders, interval=300, first=10)
+        logger.info("Планировщик напоминаний (send_24h_reminders) успешно зарегистрирован в JobQueue")
+    else:
+        logger.warning("JobQueue недоступен. Напоминания работать не будут. Убедитесь в наличии библиотеки python-telegram-bot[job-queue]")
 
     return application
 
