@@ -1,7 +1,7 @@
 # handlers/client.py
 from __future__ import annotations
 
-import html  # Добавлен импорт для безопасного форматирования HTML-разметки
+import html  # Безопасное форматирование HTML-разметки
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -9,9 +9,9 @@ from typing import Any
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-from config.settings import get_settings
+from config.settings import get_settings, BASE_DIR
 from database.connection import AsyncSessionFactory
-from database.models import Booking, BookingStatus, StudioSetting, User, UserRole  # Добавлен импорт UserRole
+from database.models import Booking, BookingStatus, StudioSetting, User, UserRole
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
 from sqlalchemy import select
@@ -26,6 +26,57 @@ SERVICE_OPTIONS = {
     "consultation": "Консультация",
     "jewelry": "Покупка украшения",
     "anodizing": "Анодирование титана",
+}
+
+# Структура зон и типов пирсинга с указанием медиафайлов
+PIERCING_ZONES = {
+    "mouth": {
+        "name": "Губы/рот",
+        "image": "mouth.png",
+        "types": [
+            "Боковой лабрет",
+            "Центральный лабрет",
+            "Вертикальный лабрет",
+            "Георгины",
+            "Джеструм",
+            "Язык"
+        ]
+    },
+    "face": {
+        "name": "Нос/лицо",
+        "image": "face.jpg",
+        "types": [
+            "Микродермал",
+            "Хай нострил",
+            "Нострил",
+            "Септум",
+            "Бровь"
+        ]
+    },
+    "body": {
+        "name": "Тело",
+        "image": None,  # Без изображения согласно требованиям
+        "types": [
+            "Соски"
+        ]
+    },
+    "ear": {
+        "name": "Уши",
+        "image": "ear.jpg",
+        "types": [
+            "Рук",
+            "Хеликс",
+            "Форвард Хеликс",
+            "Флэт",
+            "Дэйс",
+            "Конч",
+            "Трагус",
+            "Мочка",
+            "Снаг",
+            "Индастриал",
+            "Лоу Хеликс"
+        ]
+    }
 }
 
 MEDICAL_QUESTIONS = {
@@ -80,6 +131,71 @@ MEDICAL_QUESTIONS = {
 }
 
 
+def get_send_kwargs(update: Update, text: str, reply_markup: Any = None) -> dict[str, Any]:
+    """
+    Формирует аргументы для безопасной отправки текстового сообщения.
+    Автоматически учитывает темы (topics) для каналов с включенными Direct Messages
+    и форумов (message_thread_id).
+    """
+    send_kwargs: dict[str, Any] = {
+        "text": text,
+    }
+    if reply_markup is not None:
+        send_kwargs["reply_markup"] = reply_markup
+
+    if not update.effective_chat:
+        return send_kwargs
+
+    thread_id = None
+    if update.effective_message:
+        if getattr(update.effective_message, "direct_messages_topic", None):
+            thread_id = update.effective_message.direct_messages_topic.topic_id
+        elif update.effective_message.message_thread_id:
+            thread_id = update.effective_message.message_thread_id
+
+    if getattr(update.effective_chat, "is_direct_messages", False):
+        if thread_id:
+            send_kwargs["direct_messages_topic_id"] = thread_id
+    else:
+        if thread_id:
+            send_kwargs["message_thread_id"] = thread_id
+
+    return send_kwargs
+
+
+def get_photo_send_kwargs(update: Update, photo: Any, caption: str, reply_markup: Any = None) -> dict[str, Any]:
+    """
+    Формирует аргументы для безопасной отправки сообщения с фотографией.
+    Автоматически учитывает темы (topics) для каналов с включенными Direct Messages
+    и форумов (message_thread_id).
+    """
+    send_kwargs: dict[str, Any] = {
+        "photo": photo,
+        "caption": caption,
+    }
+    if reply_markup is not None:
+        send_kwargs["reply_markup"] = reply_markup
+
+    if not update.effective_chat:
+        return send_kwargs
+
+    thread_id = None
+    if update.effective_message:
+        if getattr(update.effective_message, "direct_messages_topic", None):
+            thread_id = update.effective_message.direct_messages_topic.topic_id
+        elif update.effective_message.message_thread_id:
+            thread_id = update.effective_message.message_thread_id
+
+    if getattr(update.effective_chat, "is_direct_messages", False):
+        if thread_id:
+            send_kwargs["direct_messages_topic_id"] = thread_id
+    else:
+        if thread_id:
+            send_kwargs["message_thread_id"] = thread_id
+
+    return send_kwargs
+
+
 def build_service_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(SERVICE_OPTIONS["piercing"], callback_data="service:piercing")],
@@ -91,6 +207,34 @@ def build_service_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(SERVICE_OPTIONS["anodizing"], callback_data="service:anodizing")],
         [InlineKeyboardButton("Назад", callback_data="back:main")],
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_piercing_zone_menu() -> InlineKeyboardMarkup:
+    """Генерация меню выбора зон пирсинга (всего 5 кнопок с кнопкой Назад)"""
+    keyboard = [
+        [InlineKeyboardButton("Губы/рот", callback_data="p_zone:mouth")],
+        [InlineKeyboardButton("Нос/лицо", callback_data="p_zone:face")],
+        [InlineKeyboardButton("Тело", callback_data="p_zone:body")],
+        [InlineKeyboardButton("Уши", callback_data="p_zone:ear")],
+        [InlineKeyboardButton("Назад", callback_data="booking_back")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_piercing_types_menu(zone_key: str) -> InlineKeyboardMarkup:
+    """Генерация меню конкретных проколов для выбранной зоны"""
+    zone_info = PIERCING_ZONES.get(zone_key)
+    if not zone_info:
+        return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="booking_back")]])
+
+    keyboard = []
+    for i, type_name in enumerate(zone_info["types"], 1):
+        # Префикс с цифрой добавляется для всех зон, кроме Тела (Соски)
+        btn_text = type_name if zone_key == "body" else f"{i}. {type_name}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"p_type:{zone_key}:{type_name}")])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="booking_back")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -117,8 +261,18 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state_name == "service_selection":
         text = "Выберите услугу:"
         reply_markup = build_service_menu()
+    elif state_name == "piercing_zone_selection":
+        text = "Выберите зону пирсинга:"
+        reply_markup = build_piercing_zone_menu()
     elif state_name == "await_name":
-        text = f"Вы выбрали: {context.user_data.get('selected_service')}.\n\nВведите ваше ФИО."
+        selected_service = context.user_data.get("selected_service")
+        # Если выбран пирсинг, выводим расширенную конфигурацию (Требование 5)
+        if selected_service == SERVICE_OPTIONS["piercing"]:
+            zone_name = context.user_data.get("temp_piercing_zone_name", "Не указано")
+            type_name = context.user_data.get("temp_piercing_type", "Не указано")
+            text = f"Вы выбрали: {selected_service} ({zone_name} — {type_name}).\n\nВведите ваше ФИО."
+        else:
+            text = f"Вы выбрали: {selected_service}.\n\nВведите ваше ФИО."
         reply_markup = build_back_button()
     elif state_name == "await_phone":
         text = "Введите контактный номер или ссылку на Telegram."
@@ -159,19 +313,38 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
             await transition_to_state(update, context, "await_date", edit_message=edit_message)
         return
 
-    if edit_message and update.callback_query:
+    # Флаг определяет переход к вводу имени сразу после успешного выбора пирсинга,
+    # когда все предыдущие вспомогательные сообщения были полностью удалены.
+    is_piercing_proceed = (
+        state_name == "await_name" 
+        and context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]
+    )
+
+    if edit_message and update.callback_query and not is_piercing_proceed:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
         except Exception:
-            await update.effective_message.reply_text(text, reply_markup=reply_markup)
+            if update.effective_chat:
+                kwargs = get_send_kwargs(update, text, reply_markup)
+                await update.effective_chat.send_message(**kwargs)
+            else:
+                await update.effective_message.reply_text(text, reply_markup=reply_markup)
     else:
-        if update.callback_query:
+        if update.callback_query and not is_piercing_proceed:
             try:
                 await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
             except Exception:
-                await update.effective_message.reply_text(text, reply_markup=reply_markup)
+                if update.effective_chat:
+                    kwargs = get_send_kwargs(update, text, reply_markup)
+                    await update.effective_chat.send_message(**kwargs)
+                else:
+                    await update.effective_message.reply_text(text, reply_markup=reply_markup)
         else:
-            await update.effective_message.reply_text(text, reply_markup=reply_markup)
+            if update.effective_chat:
+                kwargs = get_send_kwargs(update, text, reply_markup)
+                await update.effective_chat.send_message(**kwargs)
+            else:
+                await update.effective_message.reply_text(text, reply_markup=reply_markup)
 
 
 async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -184,12 +357,125 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["booking_state"] = None
         return
 
-    prev_state = history.pop()
     current_state = context.user_data.get("booking_state")
+    prev_state = history.pop()
 
-    # Сбрасываем некорректные/устаревшие данные при возврате назад
-    if current_state == "await_name":
+    # Если мы возвращаемся ИЗ выбора типа пирсинга В выбор зон пирсинга
+    if current_state == "piercing_type_selection":
+        context.user_data.pop("temp_piercing_zone_key", None)
+        context.user_data.pop("temp_piercing_zone_name", None)
+        context.user_data.pop("temp_piercing_type", None)
+
+        photo_msg_id = context.user_data.pop("photo_message_id", None)
+        if photo_msg_id and update.effective_chat:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=photo_msg_id)
+            except Exception as e:
+                logger.warning("Не удалось удалить сообщение с фото при возврате назад: %s", e)
+
+        query = update.callback_query
+        if query and query.message and query.message.message_id == photo_msg_id:
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.warning("Не удалось удалить callback-сообщение с фото: %s", e)
+
+        zone_menu_msg_id = context.user_data.get("zone_menu_message_id")
+        if zone_menu_msg_id and update.effective_chat:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=zone_menu_msg_id,
+                    text="Выберите зону пирсинга:",
+                    reply_markup=build_piercing_zone_menu()
+                )
+            except Exception as e:
+                logger.warning("Не удалось отредактировать меню зон: %s", e)
+                kwargs = get_send_kwargs(update, "Выберите зону пирсинга:", build_piercing_zone_menu())
+                await update.effective_chat.send_message(**kwargs)
+        else:
+            if query:
+                try:
+                    await query.edit_message_text("Выберите зону пирсинга:", reply_markup=build_piercing_zone_menu())
+                except Exception:
+                    if update.effective_chat:
+                        kwargs = get_send_kwargs(update, "Выберите зону пирсинга:", build_piercing_zone_menu())
+                        await update.effective_chat.send_message(**kwargs)
+                    else:
+                        await update.effective_message.reply_text("Выберите зону пирсинга:", reply_markup=build_piercing_zone_menu())
+            else:
+                if update.effective_chat:
+                    kwargs = get_send_kwargs(update, "Выберите зону пирсинга:", build_piercing_zone_menu())
+                    await update.effective_chat.send_message(**kwargs)
+                else:
+                    await update.effective_message.reply_text("Выберите зону пирсинга:", reply_markup=build_piercing_zone_menu())
+
+        context.user_data["booking_state"] = "piercing_zone_selection"
+        return
+
+    elif current_state == "piercing_zone_selection":
+        context.user_data.pop("selected_service", None)
+        query = update.callback_query
+        if query:
+            await query.edit_message_text("Выберите услугу:", reply_markup=build_service_menu())
+        else:
+            await update.effective_message.reply_text("Выберите услугу:", reply_markup=build_service_menu())
+        context.user_data["booking_state"] = "service_selection"
+        return
+
+    elif current_state == "await_name":
         context.user_data.pop("client_name", None)
+        if context.user_data.get("selected_service") == SERVICE_OPTIONS["piercing"]:
+            query = update.callback_query
+            if query:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+
+            zone_key = context.user_data.get("temp_piercing_zone_key")
+            zone_info = PIERCING_ZONES.get(zone_key) if zone_key else None
+            if zone_info:
+                if zone_info["image"]:
+                    kwargs = get_send_kwargs(
+                        update,
+                        f"Выбрана зона: {zone_info['name']}. Выберите тип прокола на картинке ниже."
+                    )
+                    new_zone_msg = await update.effective_chat.send_message(**kwargs)
+                    context.user_data["zone_menu_message_id"] = new_zone_msg.message_id
+
+                    image_path = BASE_DIR / "images" / zone_info["image"]
+                    try:
+                        with open(image_path, "rb") as f:
+                            photo_kwargs = get_photo_send_kwargs(
+                                update,
+                                photo=f,
+                                caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                                reply_markup=build_piercing_types_menu(zone_key)
+                            )
+                            photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
+                            context.user_data["photo_message_id"] = photo_msg.message_id
+                    except Exception as e:
+                        logger.error("Ошибка отправки фото при возврате: %s", e)
+                        fallback_kwargs = get_send_kwargs(
+                            update,
+                            text=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                            reply_markup=build_piercing_types_menu(zone_key)
+                        )
+                        fallback_msg = await update.effective_chat.send_message(**fallback_kwargs)
+                        context.user_data["photo_message_id"] = fallback_msg.message_id
+                else:
+                    body_kwargs = get_send_kwargs(
+                        update,
+                        text=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                        reply_markup=build_piercing_types_menu(zone_key)
+                    )
+                    body_msg = await update.effective_chat.send_message(**body_kwargs)
+                    context.user_data["zone_menu_message_id"] = body_msg.message_id
+
+            context.user_data["booking_state"] = "piercing_type_selection"
+            return
+
     elif current_state == "await_phone":
         context.user_data.pop("client_phone", None)
     elif current_state == "await_age":
@@ -308,11 +594,7 @@ async def process_date_availability(update: Update, context: ContextTypes.DEFAUL
         await update.effective_message.reply_text(text, reply_markup=reply_markup)
 
 
-# Вспомогательные функции для отправки уведомлений администраторам
-
-
 async def notify_admins_about_blood_disease(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Уведомляет всех администраторов о попытке записи пользователя с заболеваниями крови."""
     settings = get_settings()
     user = update.effective_user
     if not user:
@@ -347,7 +629,6 @@ async def notify_admins_about_minor(
     parent_name: str,
     parent_phone: str
 ) -> None:
-    """Уведомляет администраторов о попытке записи несовершеннолетнего."""
     settings = get_settings()
     user = update.effective_user
     if not user:
@@ -392,7 +673,6 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             reply_markup=build_service_menu(),
         )
     elif data == "support":
-        # Требование (б) — мгновенно открываем тикет и уведомляем администраторов
         from handlers.chat_bridge import create_support_ticket
         await query.answer()
         try:
@@ -401,7 +681,6 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             pass
         await create_support_ticket(update, context)
     elif data == "healing":
-        # Проверяем доступ к инструкции по заживлению через базу данных
         async with AsyncSessionFactory() as session:
             user = await session.scalar(select(User).where(User.telegram_id == query.from_user.id))
         
@@ -444,20 +723,117 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["selected_service"] = service_name
     context.user_data["history"] = ["service_selection"]
 
-    await transition_to_state(update, context, "await_name", edit_message=True)
+    # Если выбран "Пирсинг", перенаправляем на выбор зон пирсинга, иначе сразу к вводу ФИО
+    if service_key == "piercing":
+        await transition_to_state(update, context, "piercing_zone_selection", edit_message=True)
+    else:
+        await transition_to_state(update, context, "await_name", edit_message=True)
+
+
+async def handle_zone_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик выбора зоны пирсинга."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    zone_key = query.data.split(":", 1)[1]
+    zone_info = PIERCING_ZONES.get(zone_key)
+    if not zone_info:
+        return
+
+    context.user_data["temp_piercing_zone_key"] = zone_key
+    context.user_data["temp_piercing_zone_name"] = zone_info["name"]
+    context.user_data.setdefault("history", []).append("piercing_zone_selection")
+    context.user_data["zone_menu_message_id"] = query.message.message_id
+
+    if zone_info["image"]:
+        # Вариант Б: Оставляем старое текстовое сообщение нетронутым, но отключаем инлайн-кнопки во избежание дабл-кликов
+        await query.edit_message_text(
+            f"Выбрана зона: {zone_info['name']}. Выберите тип прокола на картинке ниже.",
+            reply_markup=None
+        )
+
+        image_path = BASE_DIR / "images" / zone_info["image"]
+        photo_msg = None
+        try:
+            with open(image_path, "rb") as f:
+                photo_kwargs = get_photo_send_kwargs(
+                    update,
+                    photo=f,
+                    caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                    reply_markup=build_piercing_types_menu(zone_key)
+                )
+                photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
+        except Exception as e:
+            logger.error("Ошибка при отправке изображения %s: %s", image_path, e)
+            fallback_kwargs = get_send_kwargs(
+                update,
+                text=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                reply_markup=build_piercing_types_menu(zone_key)
+            )
+            photo_msg = await update.effective_chat.send_message(**fallback_kwargs)
+
+        if photo_msg:
+            context.user_data["photo_message_id"] = photo_msg.message_id
+        context.user_data["booking_state"] = "piercing_type_selection"
+    else:
+        # Для зоны "Тело" (без изображения) просто редактируем текущее сообщение на список проколов
+        await query.edit_message_text(
+            text=f"Выберите тип прокола для зоны {zone_info['name']}:",
+            reply_markup=build_piercing_types_menu(zone_key)
+        )
+        context.user_data["booking_state"] = "piercing_type_selection"
+
+
+async def handle_type_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик выбора конкретного типа прокола."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    parts = query.data.split(":", 2)
+    type_name = parts[2]
+
+    context.user_data["temp_piercing_type"] = type_name
+    context.user_data.setdefault("history", []).append("piercing_type_selection")
+
+    # Получаем сохраненные ID сообщений для аккуратного удаления
+    photo_msg_id = context.user_data.pop("photo_message_id", None)
+    zone_menu_msg_id = context.user_data.pop("zone_menu_message_id", None)
+
+    # 1. Удаляем текстовый плейсхолдер меню зон (если он есть)
+    # Делаем проверку, чтобы избежать двойного удаления для "Тела" (где плейсхолдер совпадает с сообщением коллбэка)
+    if zone_menu_msg_id and (not query.message or zone_menu_msg_id != query.message.message_id):
+        if update.effective_chat:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=zone_menu_msg_id)
+            except Exception as e:
+                logger.warning("Не удалось удалить плейсхолдер меню на шаге ФИО: %s", e)
+
+    # 2. Удаляем сообщение с фотографией (которое и вызвало этот callback) напрямую
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.warning("Не удалось удалить сообщение с фото через query.message.delete(): %s", e)
+        # Если прямое удаление завершилось ошибкой, пробуем по сохраненному ID
+        if photo_msg_id and update.effective_chat:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=photo_msg_id)
+            except Exception:
+                pass
+
+    await transition_to_state(update, context, "await_name")
 
 
 async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_message.text is None:
         return
 
-    # Защита: если администратор сейчас находится в состоянии ввода настроек, пропускаем обработку ввода записи
     if context.user_data.get("admin_state"):
         return
 
     text = update.effective_message.text.strip()
 
-    # Защита: игнорируем ввод кнопок смены меню на этапе заполнения
     if text in ["Старт", "В начало"]:
         return
 
@@ -511,7 +887,6 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["parent_phone"] = text
         context.user_data.setdefault("history", []).append("await_parent_phone")
 
-        # Требование (в) — Ввод информации о несовершеннолетнем завершен. Оповещаем администраторов
         client_age = context.user_data.get("client_age", 0)
         parent_name = context.user_data.get("parent_name", "Не указано")
         parent_phone = text
@@ -608,7 +983,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             
             context.user_data.setdefault("medical_answers", {})
             
-            # Требование (а) — Прерывание при заболевании крови
             if q_num == 1 and answer == "yes":
                 await notify_admins_about_blood_disease(update, context)
 
@@ -617,11 +991,12 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                     "booking_state", "client_name", "client_phone", "client_age",
                     "parent_name", "parent_phone", "medical_answers", "selected_service",
                     "requested_date", "last_checked_date", "history", "admin_state",
-                    "temp_latitude", "temp_longitude"
+                    "temp_latitude", "temp_longitude", "temp_piercing_zone_key",
+                    "temp_piercing_zone_name", "temp_piercing_type", "photo_message_id",
+                    "zone_menu_message_id"
                 ]:
                     context.user_data.pop(key, None)
 
-                # Вывод сообщения пользователю и возврат в главное меню
                 text = (
                     "К сожалению, мы не сможем записать вас на прием, "
                     "так как мастер не работает с клиентами, имеющими заболевания крови.\n"
@@ -674,6 +1049,9 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 client_phone=context.user_data.get("client_phone", ""),
                 client_age=context.user_data.get("client_age", 0),
                 service_name=context.user_data.get("selected_service", "Unknown"),
+                # Добавляем сохранение выбранных зон и типов пирсинга в БД
+                piercing_zone=context.user_data.get("temp_piercing_zone_name"),
+                piercing_type=context.user_data.get("temp_piercing_type"),
                 parent_name=context.user_data.get("parent_name"),
                 parent_phone=context.user_data.get("parent_phone"),
                 has_parent_consent=True if context.user_data.get("client_age", 0) < 18 else None,
@@ -692,13 +1070,17 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
 
             end_dt = slot_dt + timedelta(hours=1, minutes=30)
             
-            # Подготовка подробного описания события для календаря
             desc_lines = [
                 f"Клиент: {booking.client_name}",
                 f"Контакт: {booking.client_phone}",
                 f"Возраст: {booking.client_age}",
                 f"Услуга: {booking.service_name}"
             ]
+            if booking.piercing_zone:
+                desc_lines.append(f"Зона пирсинга: {booking.piercing_zone}")
+            if booking.piercing_type:
+                desc_lines.append(f"Тип пирсинга: {booking.piercing_type}")
+
             if booking.client_age < 18:
                 desc_lines.append(f"Родитель: {booking.parent_name} ({booking.parent_phone})")
                 desc_lines.append("Согласие родителя: Да (автоматически)")
@@ -754,36 +1136,26 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             )
 
         if update.effective_chat is not None:
-            send_kwargs = {"text": booking_message}
-            if getattr(update.effective_chat, "is_direct_messages", False):
-                topic_id = None
-                if update.effective_message:
-                    if update.effective_message.direct_messages_topic:
-                        topic_id = update.effective_message.direct_messages_topic.topic_id
-                    elif update.effective_message.message_thread_id:
-                        topic_id = update.effective_message.message_thread_id
-                if topic_id:
-                    send_kwargs["direct_messages_topic_id"] = topic_id
-            await update.effective_chat.send_message(**send_kwargs)
+            booking_kwargs = get_send_kwargs(update, booking_message)
+            await update.effective_chat.send_message(**booking_kwargs)
 
         # Полная очистка временного состояния
-        context.user_data.pop("booking_state", None)
-        context.user_data.pop("client_name", None)
-        context.user_data.pop("client_phone", None)
-        context.user_data.pop("client_age", None)
-        context.user_data.pop("parent_name", None)
-        context.user_data.pop("parent_phone", None)
-        context.user_data.pop("medical_answers", None)
-        context.user_data.pop("selected_service", None)
-        context.user_data.pop("requested_date", None)
-        context.user_data.pop("last_checked_date", None)
-        context.user_data.pop("history", None)
+        for key in [
+            "booking_state", "client_name", "client_phone", "client_age",
+            "parent_name", "parent_phone", "medical_answers", "selected_service",
+            "requested_date", "last_checked_date", "history",
+            "temp_piercing_zone_key", "temp_piercing_zone_name", "temp_piercing_type",
+            "photo_message_id", "zone_menu_message_id"
+        ]:
+            context.user_data.pop(key, None)
         return
 
 
 client_handlers = [
     CallbackQueryHandler(handle_main_menu_callback, pattern=r"^(book|support|healing|back:main)$"),
     CallbackQueryHandler(handle_service_selection, pattern=r"^service:"),
+    CallbackQueryHandler(handle_zone_selection_callback, pattern=r"^p_zone:"),
+    CallbackQueryHandler(handle_type_selection_callback, pattern=r"^p_type:"),
     CallbackQueryHandler(handle_booking_callback, pattern=r"^(back:service|slot:|medical:|change_date|check_date:|book_slot:|booking_back)"),
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_booking_input),
 ]

@@ -45,12 +45,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user_id = update.effective_user.id
 
-    # 1. Принудительный сброс всех состояний сценария бронирования в context.user_data
+    # 1. Принудительный сброс всех состояний сценария бронирования в context.user_data (включая шаги выбора зоны и типа пирсинга)
     for key in [
         "booking_state", "client_name", "client_phone", "client_age",
         "parent_name", "parent_phone", "medical_answers", "selected_service",
         "requested_date", "last_checked_date", "history", "admin_state",
-        "temp_latitude", "temp_longitude"
+        "temp_latitude", "temp_longitude", "temp_piercing_zone_key",
+        "temp_piercing_zone_name", "temp_piercing_type", "photo_message_id",
+        "zone_menu_message_id"
     ]:
         context.user_data.pop(key, None)
 
@@ -75,7 +77,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     is_admin = await check_if_admin(user_id)
 
     if is_admin:
-        # Для администратора закрепляется стандартная клавиатура "Старт"
         admin_reply_markup = ReplyKeyboardMarkup(
             [[KeyboardButton("Старт")]],
             resize_keyboard=True
@@ -89,7 +90,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup=build_admin_main_menu()
         )
     else:
-        # Для клиента клавиатура заменяется: "Старт" при первом выводе, затем постоянная "В начало"
         start_reply_markup = ReplyKeyboardMarkup(
             [[KeyboardButton("Старт")]],
             resize_keyboard=True
@@ -113,7 +113,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup=build_main_menu()
         )
 
-    # Предотвращаем вызовы остальных групп обработчиков на это обновление
     raise ApplicationHandlerStop()
 
 
