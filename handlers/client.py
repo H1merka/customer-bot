@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 from config.settings import get_settings, BASE_DIR
@@ -75,7 +75,8 @@ PIERCING_ZONES = {
         "name": "Тело",
         "image": None,
         "types": [
-            "Соски"
+            "Соски",
+            "Пупок"
         ]
     },
     "ear": {
@@ -269,17 +270,14 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif state_name == "piercing_zone_selection":
         text = "Выберите зону пирсинга:"
         reply_markup = build_piercing_zone_menu()
-    elif state_name == "await_name":
+    elif state_name == "await_tg_link":
         selected_service = context.user_data.get("selected_service")
         if selected_service in SERVICES_WITH_ZONE:
             zone_name = context.user_data.get("temp_piercing_zone_name", "Не указано")
             type_name = context.user_data.get("temp_piercing_type", "Не указано")
-            text = f"Вы выбрали: {selected_service} ({zone_name} — {type_name}).\n\nВведите ваше ФИО."
+            text = f"Вы выбрали: {selected_service} ({zone_name} — {type_name}).\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):"
         else:
-            text = f"Вы выбрали: {selected_service}.\n\nВведите ваше ФИО."
-        reply_markup = build_back_button()
-    elif state_name == "await_phone":
-        text = "Введите контактный номер или ссылку на Telegram."
+            text = f"Вы выбрали: {selected_service}.\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):"
         reply_markup = build_back_button()
     elif state_name == "await_age":
         text = "Введите возраст целым числом."
@@ -318,7 +316,7 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     is_zone_flow_proceed = (
-        state_name == "await_name" 
+        state_name == "await_tg_link" 
         and context.user_data.get("selected_service") in SERVICES_WITH_ZONE
     )
 
@@ -424,8 +422,8 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["booking_state"] = "service_selection"
         return
 
-    elif current_state == "await_name":
-        context.user_data.pop("client_name", None)
+    elif current_state == "await_tg_link":
+        context.user_data.pop("client_tg_link", None)
         if context.user_data.get("selected_service") in SERVICES_WITH_ZONE:
             query = update.callback_query
             if query:
@@ -476,9 +474,16 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             context.user_data["booking_state"] = "piercing_type_selection"
             return
+        else:
+            context.user_data.pop("selected_service", None)
+            query = update.callback_query
+            if query:
+                await query.edit_message_text("Выберите услугу:", reply_markup=build_service_menu())
+            else:
+                await update.effective_message.reply_text("Выберите услугу:", reply_markup=build_service_menu())
+            context.user_data["booking_state"] = "service_selection"
+            return
 
-    elif current_state == "await_phone":
-        context.user_data.pop("client_phone", None)
     elif current_state == "await_age":
         context.user_data.pop("client_age", None)
     elif current_state == "await_parent_name":
@@ -499,6 +504,118 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data["medical_answers"].pop(q_info["db_field"], None)
 
     await transition_to_state(update, context, prev_state, edit_message=True)
+
+
+async def initiate_medical_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Инициирует процесс ручной модерации медицинских анкет администратором."""
+    context.user_data["booking_state"] = "paused_for_medical_review"
+    client_id = update.effective_user.id
+    client_name = html.escape(update.effective_user.full_name or "Unknown")
+    client_link = context.user_data.get("client_tg_link", "Не указана")
+    client_age = context.user_data.get("client_age", "Не указан")
+    medical_answers = context.user_data.get("medical_answers", {})
+
+    from database.models import SupportTicket, SupportTicketStatus, User, UserRole
+    from database.connection import AsyncSessionFactory
+    from sqlalchemy import select
+
+    async with AsyncSessionFactory() as session:
+        # Автоматически создаем или открываем тикет в режиме ожидания разбора
+        existing = await session.scalar(
+            select(SupportTicket).where(SupportTicket.user_telegram_id == client_id)
+        )
+        if existing is None:
+            session.add(
+                SupportTicket(
+                    user_telegram_id=client_id,
+                    status=SupportTicketStatus.OPEN,
+                )
+            )
+        else:
+            existing.status = SupportTicketStatus.OPEN
+            existing.assigned_admin_id = None
+        
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        all_admins = set(get_settings().admin_telegram_ids) | set(db_admins)
+        
+        await session.commit()
+
+    # Ссылка на топик диалога в обсуждениях
+    chat_id_str = str(update.effective_chat.id) if update.effective_chat else ""
+    if chat_id_str.startswith("-100"):
+        chat_id_clean = chat_id_str[4:]
+    else:
+        chat_id_clean = chat_id_str
+
+    thread_id = None
+    if update.effective_message:
+        if getattr(update.effective_message, "direct_messages_topic", None):
+            thread_id = update.effective_message.direct_messages_topic.topic_id
+        elif update.effective_message.message_thread_id:
+            thread_id = update.effective_message.message_thread_id
+
+    if thread_id:
+        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
+        discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
+    else:
+        discussion_text = "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
+
+    report_lines = [
+        f"📋 <b>Медицинская анкета для ручного разбора!</b>\n",
+        f"<b>Клиент:</b> {client_name} (ID: {client_id})",
+        f"<b>Ссылка на TG:</b> {html.escape(client_link)}",
+        f"<b>Возраст:</b> {client_age}\n",
+        "<b>Ответы на медицинские вопросы:</b>"
+    ]
+
+    field_to_question = {
+        "blood_disease": "1. Заболевания крови",
+        "blood_clotting": "2. Свертываемость крови",
+        "current_medication": "3. Принимаемые лекарства",
+        "chronic_disease": "4. Хронические заболевания",
+        "healing_issues": "5. Проблемы с заживлением",
+        "skin_disease": "6. Кожные заболевания"
+    }
+
+    for field, q_text in field_to_question.items():
+        ans = medical_answers.get(field, "Нет ответа")
+        report_lines.append(f"• <b>{q_text}:</b> {html.escape(str(ans))}")
+
+    report_lines.append("")
+    report_lines.append(discussion_text)
+
+    report_text = "\n".join(report_lines)
+
+    for admin_id in all_admins:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=report_text,
+                parse_mode="HTML"
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить медицинский отчет админу %s: %s", admin_id, exc)
+
+    # Уведомляем клиента о приостановке процесса записи
+    send_kwargs = get_send_kwargs(update, "Минутку, зову специалиста...")
+    await update.effective_chat.send_message(**send_kwargs)
+
+
+async def handle_resume_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик нажатия на кнопку продолжения бронирования после разбора анкеты."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    # Переводим пользователя на шаг ввода даты, а в историю пишем ссылку, чтобы работал шаг Назад
+    context.user_data["booking_state"] = "await_date"
+    context.user_data.setdefault("history", []).append("await_tg_link")
+
+    await query.edit_message_text(
+        "Пожалуйста, введите желаемую дату для записи в формате ДД.ММ.ГГГГ (например, 25.07.2026):",
+        reply_markup=build_back_button()
+    )
 
 
 async def get_free_slots_for_date(
@@ -631,8 +748,9 @@ async def notify_admins_about_blood_disease(update: Update, context: ContextType
         f"Запись была автоматически отклонена."
     )
 
+    from database.models import UserRole
     async with AsyncSessionFactory() as session:
-        db_admins = await session.scalars(select(User.telegram_id).where(User.role == "admin"))
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
         all_admins = set(settings.admin_telegram_ids) | set(db_admins)
 
     for admin_id in all_admins:
@@ -668,8 +786,9 @@ async def notify_admins_about_minor(
         f"Телефон родителя: {html.escape(parent_phone)}"
     )
 
+    from database.models import UserRole
     async with AsyncSessionFactory() as session:
-        db_admins = await session.scalars(select(User.telegram_id).where(User.role == "admin"))
+        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
         all_admins = set(settings.admin_telegram_ids) | set(db_admins)
 
     for admin_id in all_admins:
@@ -756,7 +875,7 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     if service_key in ["piercing", "apsize", "downsize"]:
         await transition_to_state(update, context, "piercing_zone_selection", edit_message=True)
     else:
-        await transition_to_state(update, context, "await_name", edit_message=True)
+        await transition_to_state(update, context, "await_tg_link", edit_message=True)
 
 
 async def handle_zone_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -842,7 +961,7 @@ async def handle_type_selection_callback(update: Update, context: ContextTypes.D
             except Exception:
                 pass
 
-    await transition_to_state(update, context, "await_name")
+    await transition_to_state(update, context, "await_tg_link")
 
 
 async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -859,17 +978,35 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
     state = context.user_data.get("booking_state")
     if not state:
+        # Сценарий Первого контакта пользователя в Сообщениях канала:
+        # Показываем постоянную Reply-клавиатуру и выводим главное меню
+        await register_user(update, context)
+        
+        client_reply_markup = ReplyKeyboardMarkup(
+            [[KeyboardButton("В начало")]],
+            resize_keyboard=True,
+            is_persistent=True
+        )
+        await update.effective_message.reply_text(
+            "Добро пожаловать в студию пирсинга.\nВыберите действие ниже.",
+            reply_markup=client_reply_markup
+        )
+        await update.effective_message.reply_text(
+            "Главное меню:",
+            reply_markup=build_main_menu()
+        )
         return
 
-    if state == "await_name":
-        context.user_data["client_name"] = text
-        context.user_data.setdefault("history", []).append("await_name")
-        await transition_to_state(update, context, "await_phone")
-        return
+    if state == "await_tg_link":
+        if not ("t.me/" in text or text.startswith("@") or "telegram.me" in text):
+            await update.effective_message.reply_text(
+                "Пожалуйста, введите корректную ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):",
+                reply_markup=build_back_button()
+            )
+            return
 
-    elif state == "await_phone":
-        context.user_data["client_phone"] = text
-        context.user_data.setdefault("history", []).append("await_phone")
+        context.user_data["client_tg_link"] = text
+        context.user_data.setdefault("history", []).append("await_tg_link")
         await transition_to_state(update, context, "await_age")
         return
 
@@ -954,10 +1091,10 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if q_num < 6:
             next_state = f"medical_question_{q_num+1}"
+            await transition_to_state(update, context, next_state)
         else:
-            next_state = "await_date"
-            
-        await transition_to_state(update, context, next_state)
+            # Все медицинские вопросы (включая детальное текстовое поле 6-го вопроса) успешно собраны
+            await initiate_medical_review(update, context)
         return
 
 
@@ -1012,7 +1149,7 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                     "requested_date", "last_checked_date", "history", "admin_state",
                     "temp_latitude", "temp_longitude", "temp_piercing_zone_key",
                     "temp_piercing_zone_name", "temp_piercing_type", "photo_message_id",
-                    "zone_menu_message_id"
+                    "zone_menu_message_id", "client_tg_link"
                 ]:
                     context.user_data.pop(key, None)
 
@@ -1035,9 +1172,12 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 
                 if q_num < 6:
                     next_state = f"medical_question_{q_num+1}"
+                    await transition_to_state(update, context, next_state, edit_message=True)
                 else:
-                    next_state = "await_date"
-                await transition_to_state(update, context, next_state, edit_message=True)
+                    # Все медицинские вопросы (нажато "Нет" на 6-й вопрос) успешно собраны
+                    await query.answer()
+                    await query.edit_message_text("Ответы на анкету приняты.")
+                    await initiate_medical_review(update, context)
         return
 
     if data.startswith("book_slot:"):
@@ -1074,8 +1214,8 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
 
             booking = Booking(
                 user_id=user.telegram_id,
-                client_name=context.user_data.get("client_name", "Unknown"),
-                client_phone=context.user_data.get("client_phone", ""),
+                client_name=update.effective_user.full_name or "Unknown",
+                client_phone=context.user_data.get("client_tg_link", ""),
                 client_age=context.user_data.get("client_age", 0),
                 service_name=selected_service,
                 piercing_zone=context.user_data.get("temp_piercing_zone_name"),
@@ -1106,7 +1246,7 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             
             desc_lines = [
                 f"Клиент: {booking.client_name}",
-                f"Контакт: {booking.client_phone}",
+                f"Контакт (Telegram): {booking.client_phone}",
                 f"Возраст: {booking.client_age}",
                 f"Услуга: {booking.service_name}"
             ]
@@ -1178,7 +1318,7 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             "parent_name", "parent_phone", "medical_answers", "selected_service",
             "requested_date", "last_checked_date", "history",
             "temp_piercing_zone_key", "temp_piercing_zone_name", "temp_piercing_type",
-            "photo_message_id", "zone_menu_message_id"
+            "photo_message_id", "zone_menu_message_id", "client_tg_link"
         ]:
             context.user_data.pop(key, None)
         return
@@ -1189,6 +1329,7 @@ client_handlers = [
     CallbackQueryHandler(handle_service_selection, pattern=r"^service:"),
     CallbackQueryHandler(handle_zone_selection_callback, pattern=r"^p_zone:"),
     CallbackQueryHandler(handle_type_selection_callback, pattern=r"^p_type:"),
+    CallbackQueryHandler(handle_resume_booking, pattern=r"^resume_booking$"),
     CallbackQueryHandler(handle_booking_callback, pattern=r"^(back:service|slot:|medical:|change_date|check_date:|book_slot:|booking_back)"),
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_booking_input),
 ]

@@ -45,14 +45,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user_id = update.effective_user.id
 
-    # 1. Принудительный сброс всех состояний сценария бронирования в context.user_data (включая шаги выбора зоны и типа пирсинга)
+    # 1. Принудительный сброс всех состояний сценария бронирования в context.user_data
     for key in [
         "booking_state", "client_name", "client_phone", "client_age",
         "parent_name", "parent_phone", "medical_answers", "selected_service",
         "requested_date", "last_checked_date", "history", "admin_state",
         "temp_latitude", "temp_longitude", "temp_piercing_zone_key",
         "temp_piercing_zone_name", "temp_piercing_type", "photo_message_id",
-        "zone_menu_message_id"
+        "zone_menu_message_id", "client_tg_link"
     ]:
         context.user_data.pop(key, None)
 

@@ -211,10 +211,42 @@ async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYP
         ticket.assigned_admin_id = None
         await session.commit()
 
-    await update.effective_message.reply_text(
-        "Диалог со специалистом поддержки завершен.",
-        reply_markup=build_main_menu()
-    )
+    # Проверяем, приостановлен ли сценарий записи для ручного разбора
+    client_user_data = context.application.user_data.get(client_id) if context.application else None
+    if client_user_data and client_user_data.get("booking_state") == "paused_for_medical_review":
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [[InlineKeyboardButton("Продолжить запись", callback_data="resume_booking")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Подтверждение закрытия администратору в служебную тему
+        await update.effective_message.reply_text(
+            "Диалог со специалистом завершен. Пользователю отправлена кнопка для продолжения бронирования."
+        )
+
+        # Вывод кнопки в чат с пользователем (Channel DM)
+        thread_id = None
+        if update.effective_message:
+            if update.effective_message.direct_messages_topic:
+                thread_id = update.effective_message.direct_messages_topic.topic_id
+            elif update.effective_message.message_thread_id:
+                thread_id = update.effective_message.message_thread_id
+
+        send_kwargs = {
+            "text": "Диалог со специалистом завершен. Вы можете продолжить бронирование услуги.",
+            "reply_markup": reply_markup
+        }
+        if thread_id:
+            if getattr(update.effective_chat, "is_direct_messages", False):
+                send_kwargs["direct_messages_topic_id"] = thread_id
+            else:
+                send_kwargs["message_thread_id"] = thread_id
+
+        await update.effective_chat.send_message(**send_kwargs)
+    else:
+        await update.effective_message.reply_text(
+            "Диалог со специалистом поддержки завершен.",
+            reply_markup=build_main_menu()
+        )
 
 
 async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -239,12 +271,19 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
                 await session.commit()
 
         await query.edit_message_text("Диалог закрыт.")
-        if update.effective_chat:
+
+        # Проверяем, приостановлен ли сценарий записи для ручного разбора
+        client_user_data = context.application.user_data.get(client_id) if context.application else None
+        if client_user_data and client_user_data.get("booking_state") == "paused_for_medical_review":
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = [[InlineKeyboardButton("Продолжить запись", callback_data="resume_booking")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
             send_kwargs = {
-                "text": "Главное меню",
-                "reply_markup": build_main_menu()
+                "text": "Диалог со специалистом завершен. Вы можете продолжить бронирование услуги.",
+                "reply_markup": reply_markup
             }
-            if getattr(update.effective_chat, "is_direct_messages", False):
+            if update.effective_chat:
                 topic_id = None
                 if query.message:
                     if query.message.direct_messages_topic:
@@ -252,5 +291,26 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
                     elif query.message.message_thread_id:
                         topic_id = query.message.message_thread_id
                 if topic_id:
-                    send_kwargs["direct_messages_topic_id"] = topic_id
-            await update.effective_chat.send_message(**send_kwargs)
+                    if getattr(update.effective_chat, "is_direct_messages", False):
+                        send_kwargs["direct_messages_topic_id"] = topic_id
+                    else:
+                        send_kwargs["message_thread_id"] = topic_id
+                await update.effective_chat.send_message(**send_kwargs)
+        else:
+            if update.effective_chat:
+                send_kwargs = {
+                    "text": "Главное меню",
+                    "reply_markup": build_main_menu()
+                }
+                topic_id = None
+                if query.message:
+                    if query.message.direct_messages_topic:
+                        topic_id = query.message.direct_messages_topic.topic_id
+                    elif query.message.message_thread_id:
+                        topic_id = query.message.message_thread_id
+                if topic_id:
+                    if getattr(update.effective_chat, "is_direct_messages", False):
+                        send_kwargs["direct_messages_topic_id"] = topic_id
+                    else:
+                        send_kwargs["message_thread_id"] = topic_id
+                await update.effective_chat.send_message(**send_kwargs)
