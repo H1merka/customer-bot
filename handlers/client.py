@@ -554,8 +554,9 @@ async def initiate_medical_review(update: Update, context: ContextTypes.DEFAULT_
         elif update.effective_message.message_thread_id:
             thread_id = update.effective_message.message_thread_id
 
+    # ИСПРАВЛЕНИЕ 1: Используем корректный трехкомпонентный формат ссылки для перехода в топик
     if thread_id:
-        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
+        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
         discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
     else:
         discussion_text = "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
@@ -596,8 +597,10 @@ async def initiate_medical_review(update: Update, context: ContextTypes.DEFAULT_
         except Exception as exc:
             logger.warning("Не удалось отправить медицинский отчет админу %s: %s", admin_id, exc)
 
-    # Уведомляем клиента о приостановке процесса записи
-    send_kwargs = get_send_kwargs(update, "Минутку, зову специалиста...")
+    # ИСПРАВЛЕНИЕ 2: Добавляем инлайн-клавиатуру с кнопкой "Закрыть диалог" прямо в топик
+    keyboard = [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    send_kwargs = get_send_kwargs(update, "Минутку, зову специалиста...", reply_markup=reply_markup)
     await update.effective_chat.send_message(**send_kwargs)
 
 

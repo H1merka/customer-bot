@@ -138,9 +138,9 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         elif update.effective_message.message_thread_id:
             thread_id = update.effective_message.message_thread_id
 
-    # Формирование текста в зависимости от наличия ID топика прямого сообщения канала
+    # ИСПРАВЛЕНИЕ: Используем трехкомпонентный формат ссылки t.me/c/CHAT_ID/TOPIC_ID/MESSAGE_ID
     if thread_id:
-        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
+        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
         discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
     else:
         discussion_text = "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
