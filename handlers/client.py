@@ -11,7 +11,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, fil
 
 from config.settings import get_settings, BASE_DIR
 from database.connection import AsyncSessionFactory
-from database.models import Booking, BookingStatus, StudioSetting, User, DayOff
+from database.models import Booking, BookingStatus, StudioSetting, User, DayOff, MediaTemplate
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
 from sqlalchemy import select
@@ -97,6 +97,57 @@ PIERCING_ZONES = {
         ]
     }
 }
+
+# --- UI CUSTOMIZATION DICTIONARIES & HELPERS ---
+
+DEFAULT_STAGE_TEXTS = {
+    "service_selection": "Выберите услугу:",
+    "zone_selection": "Выберите зону пирсинга:",
+    "await_tg_link_zone": "Вы выбрали: {service_name} ({zone_name} — {type_name}).\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):",
+    "await_tg_link_simple": "Вы выбрали: {service_name}.\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):",
+    "await_age": "Введите возраст целым числом.",
+    "await_parent_name": "Вы не достигли совершеннолетия. Пожалуйста, введите ФИО вашего родителя или законного представителя.",
+    "await_parent_phone": "Введите контактный телефон родителя или законного представителя.",
+    "await_date": "Введите желаемую дату для записи в формате ДД.ММ.ГГГГ (например, 25.07.2026):",
+    "select_slot": "Свободные слоты на {date_str}:",
+    "no_slots": "К сожалению, на {date_str} свободных мест нет. Пожалуйста, выберите соседнюю дату или введите другую:",
+}
+
+STAGE_LABELS = {
+    "service_selection": "Выбор услуги",
+    "zone_selection": "Выбор зоны",
+    "await_tg_link_zone": "Ввод TG (с зоной)",
+    "await_tg_link_simple": "Ввод TG (без зоны)",
+    "await_age": "Ввод возраста",
+    "await_parent_name": "ФИО родителя",
+    "await_parent_phone": "Телефон родителя",
+    "await_date": "Ввод даты",
+    "select_slot": "Выбор слота",
+    "no_slots": "Нет слотов",
+}
+
+
+async def get_stage_text(stage_key: str, **kwargs) -> str:
+    """
+    Получает динамический текст этапа из базы данных.
+    Если запись отсутствует или падает при форматировании, безопасно возвращает дефолтный текст.
+    """
+    default_text = DEFAULT_STAGE_TEXTS.get(stage_key, "")
+    async with AsyncSessionFactory() as session:
+        template = await session.scalar(
+            select(MediaTemplate).where(MediaTemplate.key == f"stage_txt:{stage_key}")
+        )
+        raw_text = template.value if template and template.value else default_text
+
+    try:
+        return raw_text.format(**kwargs)
+    except (KeyError, ValueError, IndexError) as exc:
+        logger.warning("Formatting failed for stage %s: %s. Falling back to default text.", stage_key, exc)
+        try:
+            return default_text.format(**kwargs)
+        except Exception:
+            return default_text
+
 
 MEDICAL_QUESTIONS = {
     1: {
@@ -265,28 +316,36 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_markup = None
 
     if state_name == "service_selection":
-        text = "Выберите услугу:"
+        text = await get_stage_text("service_selection")
         reply_markup = build_service_menu()
     elif state_name == "piercing_zone_selection":
-        text = "Выберите зону пирсинга:"
+        text = await get_stage_text("zone_selection")
         reply_markup = build_piercing_zone_menu()
     elif state_name == "await_tg_link":
         selected_service = context.user_data.get("selected_service")
         if selected_service in SERVICES_WITH_ZONE:
             zone_name = context.user_data.get("temp_piercing_zone_name", "Не указано")
             type_name = context.user_data.get("temp_piercing_type", "Не указано")
-            text = f"Вы выбрали: {selected_service} ({zone_name} — {type_name}).\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):"
+            text = await get_stage_text(
+                "await_tg_link_zone",
+                service_name=selected_service,
+                zone_name=zone_name,
+                type_name=type_name
+            )
         else:
-            text = f"Вы выбрали: {selected_service}.\n\nПожалуйста, отправьте ссылку на ваш Telegram-профиль (например, https://t.me/username или @username):"
+            text = await get_stage_text(
+                "await_tg_link_simple",
+                service_name=selected_service
+            )
         reply_markup = build_back_button()
     elif state_name == "await_age":
-        text = "Введите возраст целым числом."
+        text = await get_stage_text("await_age")
         reply_markup = build_back_button()
     elif state_name == "await_parent_name":
-        text = "Вы не достигли совершеннолетия. Пожалуйста, введите ФИО вашего родителя или законного представителя."
+        text = await get_stage_text("await_parent_name")
         reply_markup = build_back_button()
     elif state_name == "await_parent_phone":
-        text = "Введите контактный телефон родителя или законного представителя."
+        text = await get_stage_text("await_parent_phone")
         reply_markup = build_back_button()
     elif state_name.startswith("medical_question_"):
         q_num = int(state_name.split("_")[-1])
@@ -299,7 +358,7 @@ async def transition_to_state(update: Update, context: ContextTypes.DEFAULT_TYPE
         text = q_info["detail_prompt"]
         reply_markup = build_back_button()
     elif state_name == "await_date":
-        text = "Введите желаемую дату для записи в формате ДД.ММ.ГГГГ (например, 25.07.2026):"
+        text = await get_stage_text("await_date")
         reply_markup = build_back_button()
     elif state_name == "select_slot":
         req_date = context.user_data.get("requested_date")
@@ -435,7 +494,30 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
             zone_key = context.user_data.get("temp_piercing_zone_key")
             zone_info = PIERCING_ZONES.get(zone_key) if zone_key else None
             if zone_info:
-                if zone_info["image"]:
+                # Проверяем наличие динамического изображения
+                async with AsyncSessionFactory() as session:
+                    db_media = await session.scalar(
+                        select(MediaTemplate).where(MediaTemplate.key == f"zone_img:{zone_key}")
+                    )
+
+                has_image = False
+                use_file_id = False
+                img_payload = None
+
+                if db_media is not None:
+                    if db_media.telegram_file_id:
+                        has_image = True
+                        use_file_id = True
+                        img_payload = db_media.telegram_file_id
+                    else:
+                        has_image = False
+                else:
+                    if zone_info.get("image"):
+                        has_image = True
+                        use_file_id = False
+                        img_payload = BASE_DIR / "images" / zone_info["image"]
+
+                if has_image:
                     kwargs = get_send_kwargs(
                         update,
                         f"Выбрана зона: {zone_info['name']}. Выберите тип прокола на картинке ниже."
@@ -443,17 +525,25 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
                     new_zone_msg = await update.effective_chat.send_message(**kwargs)
                     context.user_data["zone_menu_message_id"] = new_zone_msg.message_id
 
-                    image_path = BASE_DIR / "images" / zone_info["image"]
                     try:
-                        with open(image_path, "rb") as f:
+                        if use_file_id:
                             photo_kwargs = get_photo_send_kwargs(
                                 update,
-                                photo=f,
+                                photo=img_payload,
                                 caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
                                 reply_markup=build_piercing_types_menu(zone_key)
                             )
                             photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
-                            context.user_data["photo_message_id"] = photo_msg.message_id
+                        else:
+                            with open(img_payload, "rb") as f:
+                                photo_kwargs = get_photo_send_kwargs(
+                                    update,
+                                    photo=f,
+                                    caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                                    reply_markup=build_piercing_types_menu(zone_key)
+                                )
+                                photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
+                        context.user_data["photo_message_id"] = photo_msg.message_id
                     except Exception as e:
                         logger.error("Ошибка отправки фото при возврате: %s", e)
                         fallback_kwargs = get_send_kwargs(
@@ -554,7 +644,6 @@ async def initiate_medical_review(update: Update, context: ContextTypes.DEFAULT_
         elif update.effective_message.message_thread_id:
             thread_id = update.effective_message.message_thread_id
 
-    # ИСПРАВЛЕНИЕ 1: Используем корректный трехкомпонентный формат ссылки для перехода в топик
     if thread_id:
         topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
         discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
@@ -597,7 +686,6 @@ async def initiate_medical_review(update: Update, context: ContextTypes.DEFAULT_
         except Exception as exc:
             logger.warning("Не удалось отправить медицинский отчет админу %s: %s", admin_id, exc)
 
-    # ИСПРАВЛЕНИЕ 2: Добавляем инлайн-клавиатуру с кнопкой "Закрыть диалог" прямо в топик
     keyboard = [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     send_kwargs = get_send_kwargs(update, "Минутку, зову специалиста...", reply_markup=reply_markup)
@@ -611,7 +699,6 @@ async def handle_resume_booking(update: Update, context: ContextTypes.DEFAULT_TY
         return
     await query.answer()
 
-    # Переводим пользователя на шаг ввода даты, а в историю пишем ссылку, чтобы работал шаг Назад
     context.user_data["booking_state"] = "await_date"
     context.user_data.setdefault("history", []).append("await_tg_link")
 
@@ -725,10 +812,10 @@ async def process_date_availability(update: Update, context: ContextTypes.DEFAUL
     context.user_data["last_checked_date"] = date_str
 
     if free_slots:
-        text = f"Свободные слоты на {date_str}:"
+        text = await get_stage_text("select_slot", date_str=date_str)
         reply_markup = build_slots_keyboard(date_str, free_slots)
     else:
-        text = f"К сожалению, на {date_str} свободных мест нет. Пожалуйста, выберите соседнюю дату или введите другую:"
+        text = await get_stage_text("no_slots", date_str=date_str)
         reply_markup = build_neighboring_dates_keyboard(target_date)
 
     if edit_message and update.callback_query:
@@ -792,7 +879,7 @@ async def notify_admins_about_minor(
     from database.models import UserRole
     async with AsyncSessionFactory() as session:
         db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
-        all_admins = set(settings.admin_telegram_ids) | set(db_admins)
+        all_admins = set(get_settings().admin_telegram_ids) | set(db_admins)
 
     for admin_id in all_admins:
         try:
@@ -814,7 +901,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
     data = query.data or ""
     if data == "book":
         await query.edit_message_text(
-            "Выберите услугу:",
+            await get_stage_text("service_selection"),
             reply_markup=build_service_menu(),
         )
     elif data == "support":
@@ -896,25 +983,57 @@ async def handle_zone_selection_callback(update: Update, context: ContextTypes.D
     context.user_data.setdefault("history", []).append("piercing_zone_selection")
     context.user_data["zone_menu_message_id"] = query.message.message_id
 
-    if zone_info["image"]:
+    # Проверка наличия кастомного изображения в БД
+    async with AsyncSessionFactory() as session:
+        db_media = await session.scalar(
+            select(MediaTemplate).where(MediaTemplate.key == f"zone_img:{zone_key}")
+        )
+
+    has_image = False
+    use_file_id = False
+    img_payload = None
+
+    if db_media is not None:
+        if db_media.telegram_file_id:
+            has_image = True
+            use_file_id = True
+            img_payload = db_media.telegram_file_id
+        else:
+            has_image = False  # Удалено администратором
+    else:
+        # Локальный fallback "из коробки"
+        if zone_info.get("image"):
+            has_image = True
+            use_file_id = False
+            img_payload = BASE_DIR / "images" / zone_info["image"]
+
+    if has_image:
         await query.edit_message_text(
             f"Выбрана зона: {zone_info['name']}. Выберите тип прокола на картинке ниже.",
             reply_markup=None
         )
 
-        image_path = BASE_DIR / "images" / zone_info["image"]
         photo_msg = None
         try:
-            with open(image_path, "rb") as f:
+            if use_file_id:
                 photo_kwargs = get_photo_send_kwargs(
                     update,
-                    photo=f,
+                    photo=img_payload,
                     caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
                     reply_markup=build_piercing_types_menu(zone_key)
                 )
                 photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
+            else:
+                with open(img_payload, "rb") as f:
+                    photo_kwargs = get_photo_send_kwargs(
+                        update,
+                        photo=f,
+                        caption=f"Выберите тип прокола для зоны {zone_info['name']}:",
+                        reply_markup=build_piercing_types_menu(zone_key)
+                    )
+                    photo_msg = await update.effective_chat.send_photo(**photo_kwargs)
         except Exception as e:
-            logger.error("Ошибка при отправке изображения %s: %s", image_path, e)
+            logger.error("Ошибка при отправке изображения зоны %s: %s", zone_key, e)
             fallback_kwargs = get_send_kwargs(
                 update,
                 text=f"Выберите тип прокола для зоны {zone_info['name']}:",
@@ -926,6 +1045,7 @@ async def handle_zone_selection_callback(update: Update, context: ContextTypes.D
             context.user_data["photo_message_id"] = photo_msg.message_id
         context.user_data["booking_state"] = "piercing_type_selection"
     else:
+        # Чисто текстовый флоу
         await query.edit_message_text(
             text=f"Выберите тип прокола для зоны {zone_info['name']}:",
             reply_markup=build_piercing_types_menu(zone_key)
@@ -1096,7 +1216,6 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
             next_state = f"medical_question_{q_num+1}"
             await transition_to_state(update, context, next_state)
         else:
-            # Все медицинские вопросы (включая детальное текстовое поле 6-го вопроса) успешно собраны
             await initiate_medical_review(update, context)
         return
 
@@ -1118,7 +1237,7 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "change_date":
         context.user_data["booking_state"] = "await_date"
         await query.edit_message_text(
-            "Введите желаемую дату для записи в формате ДД.ММ.ГГГГ (например, 25.07.2026):",
+            await get_stage_text("await_date"),
             reply_markup=build_back_button()
         )
         return
@@ -1177,7 +1296,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                     next_state = f"medical_question_{q_num+1}"
                     await transition_to_state(update, context, next_state, edit_message=True)
                 else:
-                    # Все медицинские вопросы (нажато "Нет" на 6-й вопрос) успешно собраны
                     await query.answer()
                     await query.edit_message_text("Ответы на анкету приняты.")
                     await initiate_medical_review(update, context)

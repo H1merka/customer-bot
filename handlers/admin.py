@@ -10,10 +10,13 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, fil
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
-from database.models import StudioSetting, User, UserRole, DayOff, Booking, BookingStatus
+from database.models import StudioSetting, User, UserRole, DayOff, Booking, BookingStatus, MediaTemplate
 from sqlalchemy import select, or_
 from sqlalchemy.orm import joinedload
 from services.google_calendar import GoogleCalendarService
+
+# Импорт ресурсов динамического UI из клиентского хендлера
+from handlers.client import PIERCING_ZONES, STAGE_LABELS, DEFAULT_STAGE_TEXTS, get_stage_text
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -63,6 +66,7 @@ def build_admin_settings_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Отозвать права админа", callback_data="admin_setting:revoke_admin")],
         [InlineKeyboardButton("Изменить адрес и геолокацию", callback_data="admin_setting:set_location")],
         [InlineKeyboardButton("Добавить выходные", callback_data="admin_setting:add_days_off")],
+        [InlineKeyboardButton("Настройка интерфейса пользователя", callback_data="admin_setting:ui_config")],
         [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -70,6 +74,15 @@ def build_admin_settings_menu() -> InlineKeyboardMarkup:
 
 def build_admin_cancel_button() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="admin_menu:settings")]])
+
+
+def build_zones_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
+    """Вспомогательная клавиатура для выбора зоны в UI-настройках."""
+    keyboard = []
+    for zone_key, zone_info in PIERCING_ZONES.items():
+        keyboard.append([InlineKeyboardButton(zone_info["name"], callback_data=f"{prefix}:{zone_key}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(keyboard)
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -199,6 +212,238 @@ async def handle_admin_setting_callback(update: Update, context: ContextTypes.DE
             "Введите даты выходных в формате ДД.ММ.ГГГГ через пробел (например, 25.07.2026 26.07.2026):",
             reply_markup=build_admin_cancel_button()
         )
+    elif setting_action == "ui_config":
+        context.user_data.pop("admin_state", None)
+        context.user_data.pop("edit_zone_key", None)
+        context.user_data.pop("edit_text_key", None)
+
+        keyboard = [
+            [
+                InlineKeyboardButton("Изображения", callback_data="admin_ui:images"),
+                InlineKeyboardButton("Текст", callback_data="admin_ui:texts")
+            ],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_menu:settings")]
+        ]
+        await query.edit_message_text(
+            "Настройка пользовательского интерфейса (UI):\n\nВыберите интересующий раздел:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def handle_admin_ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Управление корневыми разделами кастомизации пользовательского интерфейса."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    if not await check_if_admin(update.effective_user.id):
+        await query.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    data = query.data or ""
+    action = data.split(":", 1)[1]
+
+    if action == "images":
+        keyboard = [
+            [
+                InlineKeyboardButton("Изменить", callback_data="admin_ui_img:change_menu"),
+                InlineKeyboardButton("Удалить", callback_data="admin_ui_img:delete_menu")
+            ],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")]
+        ]
+        await query.edit_message_text(
+            "Управление изображениями зон проколов:\n\n"
+            "Выберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif action == "texts":
+        keyboard = []
+        for stage_key, label in STAGE_LABELS.items():
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_ui_txt:select:{stage_key}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")])
+        await query.edit_message_text(
+            "Управление текстами этапов записи:\n\n"
+            "Выберите этап для настройки его текста:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif action == "back_to_ui":
+        context.user_data.pop("admin_state", None)
+        context.user_data.pop("edit_zone_key", None)
+        context.user_data.pop("edit_text_key", None)
+
+        keyboard = [
+            [
+                InlineKeyboardButton("Изображения", callback_data="admin_ui:images"),
+                InlineKeyboardButton("Текст", callback_data="admin_ui:texts")
+            ],
+            [InlineKeyboardButton("Назад", callback_data="admin_menu:settings")]
+        ]
+        await query.edit_message_text(
+            "Настройка пользовательского интерфейса (UI):",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Управление изображениями зон проколов (изменение, сброс, удаление)."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    if not await check_if_admin(update.effective_user.id):
+        await query.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    data = query.data or ""
+    sub_action = data.split(":", 1)[1]
+
+    if sub_action == "change_menu":
+        await query.edit_message_text(
+            "Выберите зону, для которой хотите изменить или добавить изображение:",
+            reply_markup=build_zones_keyboard("admin_ui_img:change_zone", "admin_ui:images")
+        )
+    elif sub_action == "delete_menu":
+        await query.edit_message_text(
+            "Выберите зону, для которой хотите удалить изображение:",
+            reply_markup=build_zones_keyboard("admin_ui_img:delete_zone", "admin_ui:images")
+        )
+    elif sub_action.startswith("change_zone:"):
+        zone_key = sub_action.split(":", 1)[1]
+        zone_name = PIERCING_ZONES.get(zone_key, {}).get("name", zone_key)
+        context.user_data["admin_state"] = "await_zone_image_upload"
+        context.user_data["edit_zone_key"] = zone_key
+
+        await query.edit_message_text(
+            f"Вы выбрали изменение изображения для зоны: <b>{zone_name}</b>.\n\n"
+            f"Пожалуйста, прикрепите и отправьте новое изображение для этой зоны в чат (как фото):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:images")]]),
+            parse_mode="HTML"
+        )
+    elif sub_action.startswith("delete_zone:"):
+        zone_key = sub_action.split(":", 1)[1]
+        zone_name = PIERCING_ZONES.get(zone_key, {}).get("name", zone_key)
+
+        async with AsyncSessionFactory() as session:
+            db_media = await session.scalar(
+                select(MediaTemplate).where(MediaTemplate.key == f"zone_img:{zone_key}")
+            )
+            if db_media:
+                db_media.telegram_file_id = None
+            else:
+                session.add(MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=None))
+            await session.commit()
+
+        await query.answer(f"Изображение для зоны {zone_name} удалено.")
+        await query.edit_message_text(
+            f"Изображение для зоны <b>{zone_name}</b> успешно удалено из базы данных. "
+            f"Теперь для этой зоны бот будет использовать только текстовый режим отображения.\n\n"
+            f"Возврат в меню управления медиафайлами.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="admin_ui:images")]]),
+            parse_mode="HTML"
+        )
+
+
+async def handle_admin_ui_txt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Управление динамическими текстами этапов сценария бронирования."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    if not await check_if_admin(update.effective_user.id):
+        await query.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    data = query.data or ""
+    sub_action = data.split(":", 1)[1]
+
+    if sub_action.startswith("select:"):
+        stage_key = sub_action.split(":", 1)[1]
+        stage_label = STAGE_LABELS.get(stage_key, stage_key)
+
+        async with AsyncSessionFactory() as session:
+            template = await session.scalar(
+                select(MediaTemplate).where(MediaTemplate.key == f"stage_txt:{stage_key}")
+            )
+            current_text = template.value if template and template.value else DEFAULT_STAGE_TEXTS.get(stage_key, "")
+
+        placeholder_info = ""
+        if stage_key == "await_tg_link_zone":
+            placeholder_info = (
+                "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
+                "- <code>{service_name}</code> (название услуги)\n"
+                "- <code>{zone_name}</code> (выбранная зона)\n"
+                "- <code>{type_name}</code> (выбранный тип прокола)"
+            )
+        elif stage_key == "await_tg_link_simple":
+            placeholder_info = (
+                "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
+                "- <code>{service_name}</code> (название услуги)"
+            )
+        elif stage_key in ["select_slot", "no_slots"]:
+            placeholder_info = (
+                "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
+                "- <code>{date_str}</code> (дата бронирования)"
+            )
+        else:
+            placeholder_info = "Для этого этапа динамические плейсхолдеры отсутствуют."
+
+        context.user_data["admin_state"] = "await_ui_text_update"
+        context.user_data["edit_text_key"] = stage_key
+
+        await query.edit_message_text(
+            f"Редактирование текста для этапа: <b>{stage_label}</b>\n\n"
+            f"📝 <b>Текущий текст сообщения:</b>\n"
+            f"<blockquote>{html.escape(current_text)}</blockquote>\n\n"
+            f"{placeholder_info}\n\n"
+            f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]),
+            parse_mode="HTML"
+        )
+
+
+async def handle_admin_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик входящего графического контента от администратора."""
+    if update.effective_user is None or update.effective_message is None or not update.effective_message.photo:
+        return
+
+    if not await check_if_admin(update.effective_user.id):
+        return
+
+    admin_state = context.user_data.get("admin_state")
+    if admin_state != "await_zone_image_upload":
+        return
+
+    zone_key = context.user_data.pop("edit_zone_key", None)
+    if not zone_key:
+        await update.effective_message.reply_text(
+            "Произошла ошибка: ключ зоны не найден. Начните редактирование заново.",
+            reply_markup=build_admin_settings_menu()
+        )
+        context.user_data.pop("admin_state", None)
+        raise ApplicationHandlerStop()
+
+    # Извлечение самого качественного размера изображения
+    file_id = update.effective_message.photo[-1].file_id
+
+    async with AsyncSessionFactory() as session:
+        db_media = await session.scalar(
+            select(MediaTemplate).where(MediaTemplate.key == f"zone_img:{zone_key}")
+        )
+        if db_media:
+            db_media.telegram_file_id = file_id
+        else:
+            session.add(MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=file_id))
+        await session.commit()
+
+    context.user_data.pop("admin_state", None)
+    zone_name = PIERCING_ZONES.get(zone_key, {}).get("name", zone_key)
+    await update.effective_message.reply_text(
+        f"Изображение для зоны <b>{zone_name}</b> успешно обновлено в базе данных.\n\n"
+        f"Возврат в меню настроек.",
+        reply_markup=build_admin_settings_menu(),
+        parse_mode="HTML"
+    )
+    raise ApplicationHandlerStop()
 
 
 async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -213,6 +458,59 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     text = update.effective_message.text.strip()
+
+    if admin_state == "await_ui_text_update":
+        stage_key = context.user_data.pop("edit_text_key", None)
+        if not stage_key:
+            await update.effective_message.reply_text(
+                "Произошла ошибка: ключ этапа не найден. Начните редактирование заново.",
+                reply_markup=build_admin_settings_menu()
+            )
+            context.user_data.pop("admin_state", None)
+            raise ApplicationHandlerStop()
+
+        # Валидация плейсхолдеров для исключения сбоя выполнения строковых шаблонов у клиентов
+        test_kwargs = {}
+        if stage_key == "await_tg_link_zone":
+            test_kwargs = {"service_name": "Тест-услуга", "zone_name": "Тест-зона", "type_name": "Тест-тип"}
+        elif stage_key == "await_tg_link_simple":
+            test_kwargs = {"service_name": "Тест-услуга"}
+        elif stage_key in ["select_slot", "no_slots"]:
+            test_kwargs = {"date_str": "25.07.2026"}
+
+        try:
+            text.format(**test_kwargs)
+        except (KeyError, ValueError, IndexError) as exc:
+            context.user_data["edit_text_key"] = stage_key
+            await update.effective_message.reply_text(
+                f"⚠️ <b>Ошибка разметки!</b>\n"
+                f"Ваш текст содержит некорректно оформленные фигурные скобки или отсутствующие плейсхолдеры. "
+                f"Ошибка: <code>{html.escape(str(exc))}</code>.\n\n"
+                f"Пожалуйста, исправьте текст и пришлите его заново:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]),
+                parse_mode="HTML"
+            )
+            raise ApplicationHandlerStop()
+
+        async with AsyncSessionFactory() as session:
+            template = await session.scalar(
+                select(MediaTemplate).where(MediaTemplate.key == f"stage_txt:{stage_key}")
+            )
+            if template:
+                template.value = text
+            else:
+                session.add(MediaTemplate(key=f"stage_txt:{stage_key}", value=text))
+            await session.commit()
+
+        context.user_data.pop("admin_state", None)
+        stage_label = STAGE_LABELS.get(stage_key, stage_key)
+        await update.effective_message.reply_text(
+            f"Текст для этапа <b>{stage_label}</b> успешно сохранен в базе данных.\n\n"
+            f"Возврат в меню настроек.",
+            reply_markup=build_admin_settings_menu(),
+            parse_mode="HTML"
+        )
+        raise ApplicationHandlerStop()
 
     if admin_state in ["await_userid_grant_healing", "await_userid_add_admin", "await_userid_revoke_admin"]:
         try:
@@ -539,6 +837,10 @@ admin_handlers = [
     CallbackQueryHandler(handle_admin_menu_callback, pattern=r"^admin_menu:"),
     CallbackQueryHandler(handle_admin_setting_callback, pattern=r"^admin_setting:"),
     CallbackQueryHandler(handle_dayoff_confirm_callback, pattern=r"^admin_dayoff_confirm:"),
+    CallbackQueryHandler(handle_admin_ui_callback, pattern=r"^admin_ui:"),
+    CallbackQueryHandler(handle_admin_ui_img_callback, pattern=r"^admin_ui_img:"),
+    CallbackQueryHandler(handle_admin_ui_txt_callback, pattern=r"^admin_ui_txt:"),
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input),
     MessageHandler(filters.LOCATION, handle_admin_location_input),
+    MessageHandler(filters.PHOTO, handle_admin_photo_input),
 ]
