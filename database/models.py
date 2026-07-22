@@ -99,7 +99,9 @@ class SupportTicket(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     assigned_admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    status: Mapped[SupportTicketStatus] = mapped_column(default=SupportTicketStatus.OPEN)
+    status: Mapped[SupportTicketStatus] = mapped_column(
+        default=SupportTicketStatus.OPEN
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -11,5 +11,6 @@ dependencies = [
     "google-auth-oauthlib>=1.4.0",
     "python-dotenv>=1.2.2",
     "python-telegram-bot[job-queue]>=22.8",
+    "ruff>=0.15.22",
     "sqlalchemy>=2.0.51",
 ]

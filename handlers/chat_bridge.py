@@ -16,27 +16,41 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def get_client_id_from_update(update: Update) -> int | None:
+async def get_client_id_from_update(update: Update) -> int | None:
+    """
+    Извлекает ID клиента из контекста обновления.
+    Если запрос идет из топика прямого диалога (Channel DM), возвращает ID клиента.
+    В случае приватного чата возвращает ID отправителя, если он не является администратором.
+    """
     if update.effective_message:
         if update.effective_message.direct_messages_topic:
             return update.effective_message.direct_messages_topic.user.id
     if update.effective_user:
+        from handlers.admin import check_if_admin
+
+        # Предотвращаем ложное определение админа как клиента при отправке команд в ЛС бота
+        if await check_if_admin(update.effective_user.id):
+            return None
         return update.effective_user.id
     return None
 
 
-async def restrict_to_channel_dms(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def restrict_to_channel_dms(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_chat is None or update.effective_user is None:
         return
 
     from handlers.admin import check_if_admin
 
-    if await check_if_admin(update.effective_user.id):
+    if await check_if_admin(update.effective_user.id, context):
         return
 
     if update.effective_chat.type == "private":
         if update.callback_query:
-            await update.callback_query.answer("Запись происходит только через канал.", show_alert=True)
+            await update.callback_query.answer(
+                "Запись происходит только через канал.", show_alert=True
+            )
             await update.callback_query.edit_message_text(
                 "Запись и связь с пирсером доступны только через сообщения нашего канала:\nhttps://t.me/folpierce_ekb"
             )
@@ -52,14 +66,16 @@ async def restrict_to_channel_dms(update: Update, context: ContextTypes.DEFAULT_
         raise ApplicationHandlerStop()
 
 
-async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_silent_mode_and_commands(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_chat is None or update.effective_user is None:
         return
 
     if not getattr(update.effective_chat, "is_direct_messages", False):
         return
 
-    client_id = get_client_id_from_update(update)
+    client_id = await get_client_id_from_update(update)
     if client_id is None:
         return
 
@@ -67,14 +83,14 @@ async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.user_telegram_id == client_id,
-                SupportTicket.status == SupportTicketStatus.OPEN
+                SupportTicket.status == SupportTicketStatus.OPEN,
             )
         )
 
     if ticket is not None:
         # Проверяем, является ли сообщение командой перезапуска или закрытия диалога
         bypass_silent_mode = False
-        
+
         if update.effective_message and update.effective_message.text:
             text = update.effective_message.text.strip().lower()
             # Разрешаем пользователям использовать команды перезапуска и закрытия диалога
@@ -95,8 +111,14 @@ async def handle_silent_mode_and_commands(update: Update, context: ContextTypes.
         raise ApplicationHandlerStop()
 
 
-async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.effective_message is None or update.effective_chat is None:
+async def create_support_ticket(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if (
+        update.effective_user is None
+        or update.effective_message is None
+        or update.effective_chat is None
+    ):
         return
 
     client_id = update.effective_user.id
@@ -117,11 +139,13 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             existing.status = SupportTicketStatus.OPEN
             existing.assigned_admin_id = None
-        
+
         # Получаем список динамических администраторов из БД и объединяем с .env
-        db_admins = await session.scalars(select(User.telegram_id).where(User.role == UserRole.ADMIN))
+        db_admins = await session.scalars(
+            select(User.telegram_id).where(User.role == UserRole.ADMIN)
+        )
         all_admins = set(settings.admin_telegram_ids) | set(db_admins)
-        
+
         await session.commit()
 
     chat_id_str = str(update.effective_chat.id)
@@ -141,9 +165,13 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
     # ИСПРАВЛЕНИЕ: Используем трехкомпонентный формат ссылки t.me/c/CHAT_ID/TOPIC_ID/MESSAGE_ID
     if thread_id:
         topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
-        discussion_text = f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
+        discussion_text = (
+            f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
+        )
     else:
-        discussion_text = "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
+        discussion_text = (
+            "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
+        )
 
     for admin_id in all_admins:
         try:
@@ -154,57 +182,67 @@ async def create_support_ticket(update: Update, context: ContextTypes.DEFAULT_TY
                     f"Клиент: {client_name} (ID: {client_id})\n"
                     f"{discussion_text}"
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
             )
         except Exception as exc:
-            logger.warning("Не удалось отправить оповещение админу %s: %s", admin_id, exc)
+            logger.warning(
+                "Не удалось отправить оповещение админу %s: %s", admin_id, exc
+            )
 
     # Параметры отправки для корректной поддержки Channel Direct Messages
     send_kwargs = {
         "text": "Тикет поддержки открыт. Пирсер подключится к диалогу в ближайшее время.",
-        "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]),
+        "reply_markup": InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
+        ),
     }
-    
+
     if getattr(update.effective_chat, "is_direct_messages", False):
         if thread_id:
             send_kwargs["direct_messages_topic_id"] = thread_id
     else:
         if update.effective_message and update.effective_message.message_thread_id:
-            send_kwargs["message_thread_id"] = update.effective_message.message_thread_id
+            send_kwargs["message_thread_id"] = (
+                update.effective_message.message_thread_id
+            )
 
     await update.effective_chat.send_message(**send_kwargs)
 
 
-async def relay_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
-
-
-async def accept_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pass
-
-
-async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat is None or update.effective_user is None or update.effective_message is None:
+async def close_support_ticket(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if (
+        update.effective_chat is None
+        or update.effective_user is None
+        or update.effective_message is None
+    ):
         return
 
     from handlers.admin import check_if_admin
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         return
 
-    client_id = get_client_id_from_update(update)
+    client_id = await get_client_id_from_update(update)
     if client_id is None:
+        await update.effective_message.reply_text(
+            "Не удалось определить клиента. Команда закрытия диалога должна выполняться "
+            "строго внутри топика прямого сообщения (Channel DM) с клиентом."
+        )
         return
 
     async with AsyncSessionFactory() as session:
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.user_telegram_id == client_id,
-                SupportTicket.status == SupportTicketStatus.OPEN
+                SupportTicket.status == SupportTicketStatus.OPEN,
             )
         )
         if ticket is None:
-            await update.effective_message.reply_text("Нет активного обращения для этого чата.")
+            await update.effective_message.reply_text(
+                "Нет активного обращения для этого чата."
+            )
             return
 
         ticket.status = SupportTicketStatus.CLOSED
@@ -212,10 +250,18 @@ async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYP
         await session.commit()
 
     # Проверяем, приостановлен ли сценарий записи для ручного разбора
-    client_user_data = context.application.user_data.get(client_id) if context.application else None
-    if client_user_data and client_user_data.get("booking_state") == "paused_for_medical_review":
+    client_user_data = (
+        context.application.user_data.get(client_id) if context.application else None
+    )
+    if (
+        client_user_data
+        and client_user_data.get("booking_state") == "paused_for_medical_review"
+    ):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        keyboard = [[InlineKeyboardButton("Продолжить запись", callback_data="resume_booking")]]
+
+        keyboard = [
+            [InlineKeyboardButton("Продолжить запись", callback_data="resume_booking")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         # Подтверждение закрытия администратору в служебную тему
@@ -233,7 +279,7 @@ async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYP
 
         send_kwargs = {
             "text": "Диалог со специалистом завершен. Вы можете продолжить бронирование услуги.",
-            "reply_markup": reply_markup
+            "reply_markup": reply_markup,
         }
         if thread_id:
             if getattr(update.effective_chat, "is_direct_messages", False):
@@ -244,26 +290,25 @@ async def close_support_ticket(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_chat.send_message(**send_kwargs)
     else:
         await update.effective_message.reply_text(
-            "Диалог со специалистом поддержки завершен.",
-            reply_markup=build_main_menu()
+            "Диалог со специалистом поддержки завершен.", reply_markup=build_main_menu()
         )
 
 
-async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_support_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
     if query is None:
         return
 
     if query.data == "close_support":
-        client_id = get_client_id_from_update(update)
+        client_id = await get_client_id_from_update(update)
         if client_id is None:
             return
 
         async with AsyncSessionFactory() as session:
             ticket = await session.scalar(
-                select(SupportTicket).where(
-                    SupportTicket.user_telegram_id == client_id
-                )
+                select(SupportTicket).where(SupportTicket.user_telegram_id == client_id)
             )
             if ticket is not None:
                 ticket.assigned_admin_id = None
@@ -273,15 +318,29 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("Диалог закрыт.")
 
         # Проверяем, приостановлен ли сценарий записи для ручного разбора
-        client_user_data = context.application.user_data.get(client_id) if context.application else None
-        if client_user_data and client_user_data.get("booking_state") == "paused_for_medical_review":
+        client_user_data = (
+            context.application.user_data.get(client_id)
+            if context.application
+            else None
+        )
+        if (
+            client_user_data
+            and client_user_data.get("booking_state") == "paused_for_medical_review"
+        ):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            keyboard = [[InlineKeyboardButton("Продолжить запись", callback_data="resume_booking")]]
+
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "Продолжить запись", callback_data="resume_booking"
+                    )
+                ]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             send_kwargs = {
                 "text": "Диалог со специалистом завершен. Вы можете продолжить бронирование услуги.",
-                "reply_markup": reply_markup
+                "reply_markup": reply_markup,
             }
             if update.effective_chat:
                 topic_id = None
@@ -300,7 +359,7 @@ async def handle_support_callback(update: Update, context: ContextTypes.DEFAULT_
             if update.effective_chat:
                 send_kwargs = {
                     "text": "Главное меню",
-                    "reply_markup": build_main_menu()
+                    "reply_markup": build_main_menu(),
                 }
                 topic_id = None
                 if query.message:

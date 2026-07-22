@@ -20,12 +20,16 @@ class Settings:
         "postgresql+asyncpg://postgres:postgres@db:5432/customer_bot",
     )
     google_calendar_id: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
-    google_application_credentials: str | None = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    admin_telegram_ids: Tuple[int, ...] = field(default_factory=lambda: tuple(
-        int(item.strip())
-        for item in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",")
-        if item.strip()
-    ))
+    google_application_credentials: str | None = os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    admin_telegram_ids: Tuple[int, ...] = field(
+        default_factory=lambda: tuple(
+            int(item.strip())
+            for item in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",")
+            if item.strip()
+        )
+    )
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     @classmethod

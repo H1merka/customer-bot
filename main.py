@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
-from typing import Any
 
 from telegram import Update
 from telegram.ext import (
@@ -14,26 +12,28 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     TypeHandler,
-    filters
+    filters,
 )
 
 from config.settings import get_settings
 from database.connection import init_db
 from handlers.admin import admin_handlers, settings_command, grant_healing_access
 from handlers.chat_bridge import (
-    accept_support_ticket,
     create_support_ticket,
     handle_support_callback,
     restrict_to_channel_dms,
     handle_silent_mode_and_commands,
-    close_support_ticket
+    close_support_ticket,
 )
 from handlers.client import client_handlers
 from handlers.common import help_command, handle_channel_start, start_command
 from scheduler.jobs import send_24h_reminders  # Импорт фоновой задачи
 
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -51,34 +51,50 @@ def build_application() -> Application:
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not configured")
 
-    application = ApplicationBuilder().token(settings.bot_token).post_init(post_init).build()
+    application = (
+        ApplicationBuilder().token(settings.bot_token).post_init(post_init).build()
+    )
 
     # Фильтры разграничения доступов и тихого режима
     application.add_handler(TypeHandler(Update, restrict_to_channel_dms), group=-2)
-    application.add_handler(TypeHandler(Update, handle_silent_mode_and_commands), group=-1)
+    application.add_handler(
+        TypeHandler(Update, handle_silent_mode_and_commands), group=-1
+    )
 
     # Обработка нажатий на статические Reply-кнопки "Старт" и "В начало" (Group 0)
     application.add_handler(
-        MessageHandler(filters.TEXT & filters.Regex("^(Старт|В начало)$"), start_command),
-        group=0
+        MessageHandler(
+            filters.TEXT & filters.Regex("^(Старт|В начало)$"), start_command
+        ),
+        group=0,
     )
 
     # Административные и базовые команды (Group 0)
     application.add_handler(CommandHandler("start", start_command), group=0)
     application.add_handler(CommandHandler("help", help_command), group=0)
     application.add_handler(CommandHandler("settings", settings_command), group=0)
-    application.add_handler(CommandHandler("grant_access", grant_healing_access), group=0)
+    application.add_handler(
+        CommandHandler("grant_access", grant_healing_access), group=0
+    )
     application.add_handler(CommandHandler("support", create_support_ticket), group=0)
-    application.add_handler(CommandHandler("accept", accept_support_ticket), group=0)
-    
-    # Команды закрытия тикета поддержки администратором в monoforum (Group 0)
+
+    # Команды закрытия тикета поддержки администратором (Group 0)
     application.add_handler(CommandHandler("close", close_support_ticket), group=0)
-    application.add_handler(CommandHandler("close_support", close_support_ticket), group=0)
-    
+    application.add_handler(
+        CommandHandler("close_support", close_support_ticket), group=0
+    )
+
     # Callback-обработчики поддержки (Group 0)
-    application.add_handler(CallbackQueryHandler(handle_support_callback, pattern=r"^(accept_support|close_support)$"), group=0)
-    application.add_handler(CallbackQueryHandler(handle_channel_start, pattern=r"^channel$"), group=0)
-    
+    application.add_handler(
+        CallbackQueryHandler(
+            handle_support_callback, pattern=r"^(accept_support|close_support)$"
+        ),
+        group=0,
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_channel_start, pattern=r"^channel$"), group=0
+    )
+
     # Регистрация сценария администратора в группе приоритета 1 (Group 1)
     for handler in admin_handlers:
         application.add_handler(handler, group=1)
@@ -91,9 +107,13 @@ def build_application() -> Application:
     if application.job_queue:
         # Проверяем записи каждые 5 минут (300 сек). Первый запуск через 10 секунд после старта.
         application.job_queue.run_repeating(send_24h_reminders, interval=300, first=10)
-        logger.info("Планировщик напоминаний (send_24h_reminders) успешно зарегистрирован в JobQueue")
+        logger.info(
+            "Планировщик напоминаний (send_24h_reminders) успешно зарегистрирован в JobQueue"
+        )
     else:
-        logger.warning("JobQueue недоступен. Напоминания работать не будут. Убедитесь в наличии библиотеки python-telegram-bot[job-queue]")
+        logger.warning(
+            "JobQueue недоступен. Напоминания работать не будут. Убедитесь в наличии библиотеки python-telegram-bot[job-queue]"
+        )
 
     return application
 
@@ -102,8 +122,7 @@ def main() -> None:
     try:
         application = build_application()
         application.run_polling(
-            allowed_updates=["message", "callback_query"],
-            bootstrap_retries=5
+            allowed_updates=["message", "callback_query"], bootstrap_retries=5
         )
         logger.info("Bot started")
     except Exception as exc:  # noqa: BLE001

@@ -6,33 +6,58 @@ import logging
 from datetime import datetime, date, time, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters, ApplicationHandlerStop
+from telegram.ext import (
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+    ApplicationHandlerStop,
+)
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
-from database.models import StudioSetting, User, UserRole, DayOff, Booking, BookingStatus, MediaTemplate
+from database.models import (
+    StudioSetting,
+    User,
+    UserRole,
+    DayOff,
+    Booking,
+    BookingStatus,
+    MediaTemplate,
+)
 from sqlalchemy import select, or_
 from sqlalchemy.orm import joinedload
 from services.google_calendar import GoogleCalendarService
 
-# Импорт ресурсов динамического UI из клиентского хендлера
-from handlers.client import PIERCING_ZONES, STAGE_LABELS, DEFAULT_STAGE_TEXTS, get_stage_text
+# Прямой импорт из constants (разрывает циклическую зависимость)
+from config.constants import (
+    PIERCING_ZONES,
+    STAGE_LABELS,
+    DEFAULT_STAGE_TEXTS,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def check_if_admin(user_id: int) -> bool:
+async def check_if_admin(
+    user_id: int, context: ContextTypes.DEFAULT_TYPE | None = None
+) -> bool:
     """
-    Проверяет, является ли пользователь администратором.
-    Сначала сверяется со статическим списком в настройках .env, 
-    затем делает запрос в базу данных.
+    Проверяет права администратора. Сначала проверяется статический .env-список,
+    затем in-memory кэш сессии, и только в конце совершается обращение к БД.
     """
     if user_id in settings.admin_telegram_ids:
         return True
+
+    if context and context.user_data and context.user_data.get("is_admin") is True:
+        return True
+
     async with AsyncSessionFactory() as session:
         user = await session.scalar(select(User).where(User.telegram_id == user_id))
         if user and user.role == UserRole.ADMIN:
+            if context and context.user_data:
+                context.user_data["is_admin"] = True
             return True
     return False
 
@@ -41,7 +66,7 @@ def build_admin_main_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("Помощь", callback_data="admin_menu:help"),
-            InlineKeyboardButton("Настройки", callback_data="admin_menu:settings")
+            InlineKeyboardButton("Настройки", callback_data="admin_menu:settings"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -51,36 +76,76 @@ def build_admin_help_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("Помощь", callback_data="admin_menu:help"),
-            InlineKeyboardButton("Настройки", callback_data="admin_menu:settings")
+            InlineKeyboardButton("Настройки", callback_data="admin_menu:settings"),
         ],
-        [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")]
+        [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def build_admin_settings_menu() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("Выдать доступ к заживлению", callback_data="admin_setting:grant_healing")],
-        [InlineKeyboardButton("Обновить текст инструкции по заживлению", callback_data="admin_setting:update_healing")],
-        [InlineKeyboardButton("Добавить админа", callback_data="admin_setting:add_admin")],
-        [InlineKeyboardButton("Отозвать права админа", callback_data="admin_setting:revoke_admin")],
-        [InlineKeyboardButton("Изменить адрес и геолокацию", callback_data="admin_setting:set_location")],
-        [InlineKeyboardButton("Добавить выходные", callback_data="admin_setting:add_days_off")],
-        [InlineKeyboardButton("Настройка интерфейса пользователя", callback_data="admin_setting:ui_config")],
-        [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")]
+        [
+            InlineKeyboardButton(
+                "Выдать доступ к заживлению",
+                callback_data="admin_setting:grant_healing",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Обновить текст инструкции по заживлению",
+                callback_data="admin_setting:update_healing",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Добавить админа", callback_data="admin_setting:add_admin"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Отозвать права админа", callback_data="admin_setting:revoke_admin"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Изменить адрес и геолокацию",
+                callback_data="admin_setting:set_location",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Добавить выходные", callback_data="admin_setting:add_days_off"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Настройка интерфейса пользователя",
+                callback_data="admin_setting:ui_config",
+            )
+        ],
+        [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def build_admin_cancel_button() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="admin_menu:settings")]])
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Назад", callback_data="admin_menu:settings")]]
+    )
 
 
 def build_zones_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     """Вспомогательная клавиатура для выбора зоны в UI-настройках."""
     keyboard = []
     for zone_key, zone_info in PIERCING_ZONES.items():
-        keyboard.append([InlineKeyboardButton(zone_info["name"], callback_data=f"{prefix}:{zone_key}")])
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    zone_info["name"], callback_data=f"{prefix}:{zone_key}"
+                )
+            ]
+        )
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(keyboard)
 
@@ -89,27 +154,32 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if update.effective_user is None or update.effective_message is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
-        await update.effective_message.reply_text("У вас нет доступа к административным настройкам.")
+    if not await check_if_admin(update.effective_user.id, context):
+        await update.effective_message.reply_text(
+            "У вас нет доступа к административным настройкам."
+        )
         return
 
     await update.effective_message.reply_text(
-        "Административные настройки студии:",
-        reply_markup=build_admin_settings_menu()
+        "Административные настройки студии:", reply_markup=build_admin_settings_menu()
     )
 
 
-async def grant_healing_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def grant_healing_access(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Legacy-команда быстрого доступа для обратной совместимости."""
     if update.effective_user is None or update.effective_message is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         return
 
     args = context.args
     if not args:
-        await update.effective_message.reply_text("Использование: /grant_access <telegram_id>")
+        await update.effective_message.reply_text(
+            "Использование: /grant_access <telegram_id>"
+        )
         return
 
     try:
@@ -121,22 +191,28 @@ async def grant_healing_access(update: Update, context: ContextTypes.DEFAULT_TYP
     async with AsyncSessionFactory() as session:
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is None:
-            user = User(telegram_id=telegram_id, username="unknown", full_name="Пользователь")
+            user = User(
+                telegram_id=telegram_id, username="unknown", full_name="Пользователь"
+            )
             session.add(user)
             await session.flush()
 
         user.has_healing_access = True
         await session.commit()
 
-    await update.effective_message.reply_text("Доступ к инструкции по заживлению выдан.")
+    await update.effective_message.reply_text(
+        "Доступ к инструкции по заживлению выдан."
+    )
 
 
-async def handle_admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_menu_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -154,22 +230,27 @@ async def handle_admin_menu_callback(update: Update, context: ContextTypes.DEFAU
     elif action == "settings":
         context.user_data.pop("admin_state", None)
         context.user_data.pop("temp_days_off_dates", None)
-        await query.edit_message_text("Административные настройки студии:", reply_markup=build_admin_settings_menu())
+        await query.edit_message_text(
+            "Административные настройки студии:",
+            reply_markup=build_admin_settings_menu(),
+        )
     elif action == "back_to_start":
         context.user_data.pop("admin_state", None)
         context.user_data.pop("temp_days_off_dates", None)
         await query.edit_message_text(
             "Добро пожаловать в административный интерфейс студии пирсинга.\nВыберите действие ниже.",
-            reply_markup=build_admin_main_menu()
+            reply_markup=build_admin_main_menu(),
         )
 
 
-async def handle_admin_setting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_setting_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -180,37 +261,37 @@ async def handle_admin_setting_callback(update: Update, context: ContextTypes.DE
         context.user_data["admin_state"] = "await_userid_grant_healing"
         await query.edit_message_text(
             "Введите Telegram ID пользователя, которому хотите выдать доступ к инструкции по заживлению:",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "update_healing":
         context.user_data["admin_state"] = "await_healing_instructions_text"
         await query.edit_message_text(
             "Введите новый текст инструкции по заживлению (будет сохранен как обычный текст):",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "add_admin":
         context.user_data["admin_state"] = "await_userid_add_admin"
         await query.edit_message_text(
             "Введите Telegram ID пользователя, которого хотите назначить администратором:",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "revoke_admin":
         context.user_data["admin_state"] = "await_userid_revoke_admin"
         await query.edit_message_text(
             "Введите Telegram ID администратора, у которого хотите отозвать права:",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "set_location":
         context.user_data["admin_state"] = "await_location"
         await query.edit_message_text(
             "Отправьте геолокацию студии через Telegram (прикрепите геопозицию).",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "add_days_off":
         context.user_data["admin_state"] = "await_days_off"
         await query.edit_message_text(
             "Введите даты выходных в формате ДД.ММ.ГГГГ через пробел (например, 25.07.2026 26.07.2026):",
-            reply_markup=build_admin_cancel_button()
+            reply_markup=build_admin_cancel_button(),
         )
     elif setting_action == "ui_config":
         context.user_data.pop("admin_state", None)
@@ -220,23 +301,25 @@ async def handle_admin_setting_callback(update: Update, context: ContextTypes.DE
         keyboard = [
             [
                 InlineKeyboardButton("Изображения", callback_data="admin_ui:images"),
-                InlineKeyboardButton("Текст", callback_data="admin_ui:texts")
+                InlineKeyboardButton("Текст", callback_data="admin_ui:texts"),
             ],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_menu:settings")]
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_menu:settings")],
         ]
         await query.edit_message_text(
             "Настройка пользовательского интерфейса (UI):\n\nВыберите интересующий раздел:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
 
-async def handle_admin_ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_ui_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Управление корневыми разделами кастомизации пользовательского интерфейса."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -246,25 +329,36 @@ async def handle_admin_ui_callback(update: Update, context: ContextTypes.DEFAULT
     if action == "images":
         keyboard = [
             [
-                InlineKeyboardButton("Изменить", callback_data="admin_ui_img:change_menu"),
-                InlineKeyboardButton("Удалить", callback_data="admin_ui_img:delete_menu")
+                InlineKeyboardButton(
+                    "Изменить", callback_data="admin_ui_img:change_menu"
+                ),
+                InlineKeyboardButton(
+                    "Удалить", callback_data="admin_ui_img:delete_menu"
+                ),
             ],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")]
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
         ]
         await query.edit_message_text(
-            "Управление изображениями зон проколов:\n\n"
-            "Выберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "Управление изображениями зон проколов:\n\nВыберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
     elif action == "texts":
         keyboard = []
         for stage_key, label in STAGE_LABELS.items():
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_ui_txt:select:{stage_key}")])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")])
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        label, callback_data=f"admin_ui_txt:select:{stage_key}"
+                    )
+                ]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")]
+        )
         await query.edit_message_text(
             "Управление текстами этапов записи:\n\n"
             "Выберите этап для настройки его текста:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
     elif action == "back_to_ui":
         context.user_data.pop("admin_state", None)
@@ -274,23 +368,25 @@ async def handle_admin_ui_callback(update: Update, context: ContextTypes.DEFAULT
         keyboard = [
             [
                 InlineKeyboardButton("Изображения", callback_data="admin_ui:images"),
-                InlineKeyboardButton("Текст", callback_data="admin_ui:texts")
+                InlineKeyboardButton("Текст", callback_data="admin_ui:texts"),
             ],
-            [InlineKeyboardButton("Назад", callback_data="admin_menu:settings")]
+            [InlineKeyboardButton("Назад", callback_data="admin_menu:settings")],
         ]
         await query.edit_message_text(
             "Настройка пользовательского интерфейса (UI):",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
 
-async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_ui_img_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Управление изображениями зон проколов (изменение, сброс, удаление)."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -300,12 +396,16 @@ async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEF
     if sub_action == "change_menu":
         await query.edit_message_text(
             "Выберите зону, для которой хотите изменить или добавить изображение:",
-            reply_markup=build_zones_keyboard("admin_ui_img:change_zone", "admin_ui:images")
+            reply_markup=build_zones_keyboard(
+                "admin_ui_img:change_zone", "admin_ui:images"
+            ),
         )
     elif sub_action == "delete_menu":
         await query.edit_message_text(
             "Выберите зону, для которой хотите удалить изображение:",
-            reply_markup=build_zones_keyboard("admin_ui_img:delete_zone", "admin_ui:images")
+            reply_markup=build_zones_keyboard(
+                "admin_ui_img:delete_zone", "admin_ui:images"
+            ),
         )
     elif sub_action.startswith("change_zone:"):
         zone_key = sub_action.split(":", 1)[1]
@@ -316,8 +416,10 @@ async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEF
         await query.edit_message_text(
             f"Вы выбрали изменение изображения для зоны: <b>{zone_name}</b>.\n\n"
             f"Пожалуйста, прикрепите и отправьте новое изображение для этой зоны в чат (как фото):",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:images")]]),
-            parse_mode="HTML"
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Отмена", callback_data="admin_ui:images")]]
+            ),
+            parse_mode="HTML",
         )
     elif sub_action.startswith("delete_zone:"):
         zone_key = sub_action.split(":", 1)[1]
@@ -330,7 +432,9 @@ async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEF
             if db_media:
                 db_media.telegram_file_id = None
             else:
-                session.add(MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=None))
+                session.add(
+                    MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=None)
+                )
             await session.commit()
 
         await query.answer(f"Изображение для зоны {zone_name} удалено.")
@@ -338,18 +442,22 @@ async def handle_admin_ui_img_callback(update: Update, context: ContextTypes.DEF
             f"Изображение для зоны <b>{zone_name}</b> успешно удалено из базы данных. "
             f"Теперь для этой зоны бот будет использовать только текстовый режим отображения.\n\n"
             f"Возврат в меню управления медиафайлами.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="admin_ui:images")]]),
-            parse_mode="HTML"
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Назад", callback_data="admin_ui:images")]]
+            ),
+            parse_mode="HTML",
         )
 
 
-async def handle_admin_ui_txt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_ui_txt_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Управление динамическими текстами этапов сценария бронирования."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -362,27 +470,33 @@ async def handle_admin_ui_txt_callback(update: Update, context: ContextTypes.DEF
 
         async with AsyncSessionFactory() as session:
             template = await session.scalar(
-                select(MediaTemplate).where(MediaTemplate.key == f"stage_txt:{stage_key}")
+                select(MediaTemplate).where(
+                    MediaTemplate.key == f"stage_txt:{stage_key}"
+                )
             )
-            current_text = template.value if template and template.value else DEFAULT_STAGE_TEXTS.get(stage_key, "")
+            current_text = (
+                template.value
+                if template and template.value
+                else DEFAULT_STAGE_TEXTS.get(stage_key, "")
+            )
 
         placeholder_info = ""
         if stage_key == "await_tg_link_zone":
             placeholder_info = (
                 "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
-                "- <code>{service_name}</code> (название услуги)\n"
-                "- <code>{zone_name}</code> (выбранная зона)\n"
-                "- <code>{type_name}</code> (выбранный тип прокола)"
+                "- <code>{{service_name}}</code> (название услуги)\n"
+                "- <code>{{zone_name}}</code> (выбранная зона)\n"
+                "- <code>{{type_name}}</code> (выбранный тип прокола)"
             )
         elif stage_key == "await_tg_link_simple":
             placeholder_info = (
                 "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
-                "- <code>{service_name}</code> (название услуги)"
+                "- <code>{{service_name}}</code> (название услуги)"
             )
         elif stage_key in ["select_slot", "no_slots"]:
             placeholder_info = (
                 "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
-                "- <code>{date_str}</code> (дата бронирования)"
+                "- <code>{{date_str}}</code> (дата бронирования)"
             )
         else:
             placeholder_info = "Для этого этапа динамические плейсхолдеры отсутствуют."
@@ -396,17 +510,25 @@ async def handle_admin_ui_txt_callback(update: Update, context: ContextTypes.DEF
             f"<blockquote>{html.escape(current_text)}</blockquote>\n\n"
             f"{placeholder_info}\n\n"
             f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]),
-            parse_mode="HTML"
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]
+            ),
+            parse_mode="HTML",
         )
 
 
-async def handle_admin_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_photo_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Обработчик входящего графического контента от администратора."""
-    if update.effective_user is None or update.effective_message is None or not update.effective_message.photo:
+    if (
+        update.effective_user is None
+        or update.effective_message is None
+        or not update.effective_message.photo
+    ):
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         return
 
     admin_state = context.user_data.get("admin_state")
@@ -417,7 +539,7 @@ async def handle_admin_photo_input(update: Update, context: ContextTypes.DEFAULT
     if not zone_key:
         await update.effective_message.reply_text(
             "Произошла ошибка: ключ зоны не найден. Начните редактирование заново.",
-            reply_markup=build_admin_settings_menu()
+            reply_markup=build_admin_settings_menu(),
         )
         context.user_data.pop("admin_state", None)
         raise ApplicationHandlerStop()
@@ -432,7 +554,9 @@ async def handle_admin_photo_input(update: Update, context: ContextTypes.DEFAULT
         if db_media:
             db_media.telegram_file_id = file_id
         else:
-            session.add(MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=file_id))
+            session.add(
+                MediaTemplate(key=f"zone_img:{zone_key}", telegram_file_id=file_id)
+            )
         await session.commit()
 
     context.user_data.pop("admin_state", None)
@@ -441,16 +565,22 @@ async def handle_admin_photo_input(update: Update, context: ContextTypes.DEFAULT
         f"Изображение для зоны <b>{zone_name}</b> успешно обновлено в базе данных.\n\n"
         f"Возврат в меню настроек.",
         reply_markup=build_admin_settings_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     raise ApplicationHandlerStop()
 
 
-async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.effective_message is None or update.effective_message.text is None:
+async def handle_admin_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if (
+        update.effective_user is None
+        or update.effective_message is None
+        or update.effective_message.text is None
+    ):
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         return
 
     admin_state = context.user_data.get("admin_state")
@@ -464,7 +594,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not stage_key:
             await update.effective_message.reply_text(
                 "Произошла ошибка: ключ этапа не найден. Начните редактирование заново.",
-                reply_markup=build_admin_settings_menu()
+                reply_markup=build_admin_settings_menu(),
             )
             context.user_data.pop("admin_state", None)
             raise ApplicationHandlerStop()
@@ -472,7 +602,11 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Валидация плейсхолдеров для исключения сбоя выполнения строковых шаблонов у клиентов
         test_kwargs = {}
         if stage_key == "await_tg_link_zone":
-            test_kwargs = {"service_name": "Тест-услуга", "zone_name": "Тест-зона", "type_name": "Тест-тип"}
+            test_kwargs = {
+                "service_name": "Тест-услуга",
+                "zone_name": "Тест-зона",
+                "type_name": "Тест-тип",
+            }
         elif stage_key == "await_tg_link_simple":
             test_kwargs = {"service_name": "Тест-услуга"}
         elif stage_key in ["select_slot", "no_slots"]:
@@ -487,14 +621,18 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"Ваш текст содержит некорректно оформленные фигурные скобки или отсутствующие плейсхолдеры. "
                 f"Ошибка: <code>{html.escape(str(exc))}</code>.\n\n"
                 f"Пожалуйста, исправьте текст и пришлите его заново:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]),
-                parse_mode="HTML"
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]
+                ),
+                parse_mode="HTML",
             )
             raise ApplicationHandlerStop()
 
         async with AsyncSessionFactory() as session:
             template = await session.scalar(
-                select(MediaTemplate).where(MediaTemplate.key == f"stage_txt:{stage_key}")
+                select(MediaTemplate).where(
+                    MediaTemplate.key == f"stage_txt:{stage_key}"
+                )
             )
             if template:
                 template.value = text
@@ -508,23 +646,29 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Текст для этапа <b>{stage_label}</b> успешно сохранен в базе данных.\n\n"
             f"Возврат в меню настроек.",
             reply_markup=build_admin_settings_menu(),
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
         raise ApplicationHandlerStop()
 
-    if admin_state in ["await_userid_grant_healing", "await_userid_add_admin", "await_userid_revoke_admin"]:
+    if admin_state in [
+        "await_userid_grant_healing",
+        "await_userid_add_admin",
+        "await_userid_revoke_admin",
+    ]:
         try:
             target_id = int(text)
         except ValueError:
             await update.effective_message.reply_text(
                 "Пожалуйста, введите корректный числовой Telegram ID пользователя.",
-                reply_markup=build_admin_cancel_button()
+                reply_markup=build_admin_cancel_button(),
             )
             raise ApplicationHandlerStop()
 
         async with AsyncSessionFactory() as session:
-            user = await session.scalar(select(User).where(User.telegram_id == target_id))
-            
+            user = await session.scalar(
+                select(User).where(User.telegram_id == target_id)
+            )
+
             if user is None:
                 user = User(
                     telegram_id=target_id,
@@ -539,17 +683,21 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 success_text = f"Доступ к инструкции по заживлению успешно выдан пользователю {target_id}."
             elif admin_state == "await_userid_add_admin":
                 user.role = UserRole.ADMIN
-                success_text = f"Пользователь {target_id} успешно назначен администратором."
+                success_text = (
+                    f"Пользователь {target_id} успешно назначен администратором."
+                )
             elif admin_state == "await_userid_revoke_admin":
                 user.role = UserRole.USER
-                success_text = f"Права администратора у пользователя {target_id} успешно отозваны."
+                success_text = (
+                    f"Права администратора у пользователя {target_id} успешно отозваны."
+                )
 
             await session.commit()
 
         context.user_data.pop("admin_state", None)
         await update.effective_message.reply_text(
             success_text + "\n\nВозврат в меню настроек.",
-            reply_markup=build_admin_settings_menu()
+            reply_markup=build_admin_settings_menu(),
         )
         raise ApplicationHandlerStop()
 
@@ -565,7 +713,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop("admin_state", None)
         await update.effective_message.reply_text(
             "Текст инструкции по заживлению успешно обновлен.\n\nВозврат в меню настроек.",
-            reply_markup=build_admin_settings_menu()
+            reply_markup=build_admin_settings_menu(),
         )
         raise ApplicationHandlerStop()
 
@@ -576,13 +724,17 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if latitude is None or longitude is None:
             await update.effective_message.reply_text(
                 "Произошла ошибка: координаты не найдены. Попробуйте начать заново.",
-                reply_markup=build_admin_settings_menu()
+                reply_markup=build_admin_settings_menu(),
             )
             context.user_data.pop("admin_state", None)
             raise ApplicationHandlerStop()
 
         async with AsyncSessionFactory() as session:
-            for key, val in [("latitude", str(latitude)), ("longitude", str(longitude)), ("address_text", text)]:
+            for key, val in [
+                ("latitude", str(latitude)),
+                ("longitude", str(longitude)),
+                ("address_text", text),
+            ]:
                 setting = await session.get(StudioSetting, key)
                 if setting:
                     setting.value = val
@@ -593,7 +745,7 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop("admin_state", None)
         await update.effective_message.reply_text(
             "Геолокация и текстовый адрес студии успешно обновлены.\n\nВозврат в меню настроек.",
-            reply_markup=build_admin_settings_menu()
+            reply_markup=build_admin_settings_menu(),
         )
         raise ApplicationHandlerStop()
 
@@ -613,14 +765,14 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.effective_message.reply_text(
                 f"Не удалось распознать следующие даты: {', '.join(invalid_dates)}.\n"
                 "Пожалуйста, введите корректные даты в формате ДД.ММ.ГГГГ через пробел:",
-                reply_markup=build_admin_cancel_button()
+                reply_markup=build_admin_cancel_button(),
             )
             raise ApplicationHandlerStop()
 
         if not valid_dates:
             await update.effective_message.reply_text(
                 "Вы не ввели ни одной даты. Пожалуйста, попробуйте еще раз:",
-                reply_markup=build_admin_cancel_button()
+                reply_markup=build_admin_cancel_button(),
             )
             raise ApplicationHandlerStop()
 
@@ -629,7 +781,9 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for d in valid_dates:
             start_dt = datetime.combine(d, time.min)
             end_dt = datetime.combine(d, time.max)
-            clauses.append((Booking.date_time >= start_dt) & (Booking.date_time <= end_dt))
+            clauses.append(
+                (Booking.date_time >= start_dt) & (Booking.date_time <= end_dt)
+            )
 
         async with AsyncSessionFactory() as session:
             conflicting_bookings = []
@@ -659,7 +813,11 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 text_lines.append(f"📅 <b>{d.strftime('%d.%m.%Y')}</b>:")
                 for b in sorted(by_date[d], key=lambda x: x.date_time):
                     time_str = b.date_time.strftime("%H:%M")
-                    username_str = f" (@{html.escape(b.user.username)})" if b.user and b.user.username else ""
+                    username_str = (
+                        f" (@{html.escape(b.user.username)})"
+                        if b.user and b.user.username
+                        else ""
+                    )
                     text_lines.append(
                         f"  • {time_str} - {html.escape(b.client_name)}{username_str} "
                         f"(Тел: {html.escape(b.client_phone)}, Услуга: {html.escape(b.service_name)})"
@@ -673,7 +831,9 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             confirm_text = "\n".join(text_lines)
         else:
-            dates_list_str = ", ".join(d.strftime("%d.%m.%Y") for d in sorted(valid_dates))
+            dates_list_str = ", ".join(
+                d.strftime("%d.%m.%Y") for d in sorted(valid_dates)
+            )
             confirm_text = (
                 f"На выбранные даты (<b>{dates_list_str}</b>) нет активных записей.\n\n"
                 "Вы уверены, что хотите установить эти выходные?"
@@ -682,23 +842,23 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         keyboard = [
             [
                 InlineKeyboardButton("Да", callback_data="admin_dayoff_confirm:yes"),
-                InlineKeyboardButton("Нет", callback_data="admin_dayoff_confirm:no")
+                InlineKeyboardButton("Нет", callback_data="admin_dayoff_confirm:no"),
             ]
         ]
         await update.effective_message.reply_text(
-            confirm_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
+            confirm_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
         )
         raise ApplicationHandlerStop()
 
 
-async def handle_dayoff_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_dayoff_confirm_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         await query.answer("У вас нет прав администратора.", show_alert=True)
         return
 
@@ -712,7 +872,7 @@ async def handle_dayoff_confirm_callback(update: Update, context: ContextTypes.D
         await query.answer("Действие отменено.")
         await query.edit_message_text(
             "Установка выходных дней отменена.\n\nВозврат в меню настроек.",
-            reply_markup=build_admin_settings_menu()
+            reply_markup=build_admin_settings_menu(),
         )
         return
 
@@ -760,19 +920,28 @@ async def handle_dayoff_confirm_callback(update: Update, context: ContextTypes.D
                         chat_id=booking.chat_id,
                         direct_messages_topic_id=booking.direct_messages_topic_id,
                         text=notify_text,
-                        parse_mode="HTML"
+                        parse_mode="HTML",
                     )
-                    logger.info("Уведомление об отмене отправлено в топик для бронирования %s", booking.id)
+                    logger.info(
+                        "Уведомление об отмене отправлено в топик для бронирования %s",
+                        booking.id,
+                    )
                 else:
                     # Резервный вариант — прямая отправка в ЛС пользователю
                     await context.bot.send_message(
-                        chat_id=booking.user_id,
-                        text=notify_text,
-                        parse_mode="HTML"
+                        chat_id=booking.user_id, text=notify_text, parse_mode="HTML"
                     )
-                    logger.info("Уведомление об отмене отправлено в ЛС для бронирования %s", booking.id)
+                    logger.info(
+                        "Уведомление об отмене отправлено в ЛС для бронирования %s",
+                        booking.id,
+                    )
             except Exception as exc:
-                logger.error("Не удалось отправить уведомление пользователю %s об отмене бронирования %s: %s", booking.user_id, booking.id, exc)
+                logger.error(
+                    "Не удалось отправить уведомление пользователю %s об отмене бронирования %s: %s",
+                    booking.user_id,
+                    booking.id,
+                    exc,
+                )
 
         # 2. Сохранение выходных дней в БД и создание блокирующих событий в Google Calendar
         added_dates_count = 0
@@ -791,7 +960,7 @@ async def handle_dayoff_confirm_callback(update: Update, context: ContextTypes.D
                 booking_summary="ВЫХОДНОЙ СТУДИИ",
                 description="Этот день был отмечен как выходной администратором в настройках.",
                 start_dt=start_dt,
-                end_dt=end_dt
+                end_dt=end_dt,
             )
 
             day_off = DayOff(date=d, google_event_id=g_event_id)
@@ -806,15 +975,21 @@ async def handle_dayoff_confirm_callback(update: Update, context: ContextTypes.D
         f"Отменено конфликтующих записей: <b>{len(conflicting_bookings)}</b>.\n\n"
         f"Возврат в меню настроек.",
         reply_markup=build_admin_settings_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
-async def handle_admin_location_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.effective_message is None or update.effective_message.location is None:
+async def handle_admin_location_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if (
+        update.effective_user is None
+        or update.effective_message is None
+        or update.effective_message.location is None
+    ):
         return
 
-    if not await check_if_admin(update.effective_user.id):
+    if not await check_if_admin(update.effective_user.id, context):
         return
 
     admin_state = context.user_data.get("admin_state")
@@ -828,7 +1003,7 @@ async def handle_admin_location_input(update: Update, context: ContextTypes.DEFA
 
     await update.effective_message.reply_text(
         "Координаты зафиксированы. Теперь введите текстовый адрес студии:",
-        reply_markup=build_admin_cancel_button()
+        reply_markup=build_admin_cancel_button(),
     )
     raise ApplicationHandlerStop()
 
@@ -836,7 +1011,9 @@ async def handle_admin_location_input(update: Update, context: ContextTypes.DEFA
 admin_handlers = [
     CallbackQueryHandler(handle_admin_menu_callback, pattern=r"^admin_menu:"),
     CallbackQueryHandler(handle_admin_setting_callback, pattern=r"^admin_setting:"),
-    CallbackQueryHandler(handle_dayoff_confirm_callback, pattern=r"^admin_dayoff_confirm:"),
+    CallbackQueryHandler(
+        handle_dayoff_confirm_callback, pattern=r"^admin_dayoff_confirm:"
+    ),
     CallbackQueryHandler(handle_admin_ui_callback, pattern=r"^admin_ui:"),
     CallbackQueryHandler(handle_admin_ui_img_callback, pattern=r"^admin_ui_img:"),
     CallbackQueryHandler(handle_admin_ui_txt_callback, pattern=r"^admin_ui_txt:"),

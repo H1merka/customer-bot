@@ -19,7 +19,9 @@ class GoogleCalendarService:
             return self._service
 
         if not self.settings.google_application_credentials:
-            logger.warning("Google credentials are not configured; calendar integration is disabled")
+            logger.warning(
+                "Google credentials are not configured; calendar integration is disabled"
+            )
             return None
 
         try:
@@ -34,31 +36,41 @@ class GoogleCalendarService:
                 self.settings.google_application_credentials,
                 scopes=["https://www.googleapis.com/auth/calendar"],
             )
-            self._service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+            self._service = build(
+                "calendar", "v3", credentials=credentials, cache_discovery=False
+            )
             return self._service
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unable to initialize Google Calendar client: %s", exc)
             return None
 
-    async def list_free_slots(self, calendar_id: str = "primary") -> list[dict[str, Any]]:
+    async def list_free_slots(
+        self, calendar_id: str = "primary"
+    ) -> list[dict[str, Any]]:
         service = await self._get_service()
         if service is None:
             return []
 
         try:
-            events_result = service.events().list(
-                calendarId=calendar_id,
-                timeMin="2026-01-01T00:00:00Z",
-                maxResults=50,
-                singleEvents=True,
-                orderBy="startTime",
-            ).execute()
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin="2026-01-01T00:00:00Z",
+                    maxResults=50,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
             return events_result.get("items", [])
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to retrieve Google Calendar slots: %s", exc)
             return []
 
-    async def update_booking_event(self, event_id: str, booking_summary: str, description: str) -> bool:
+    async def update_booking_event(
+        self, event_id: str, booking_summary: str, description: str
+    ) -> bool:
         service = await self._get_service()
         if service is None:
             return False
@@ -74,10 +86,14 @@ class GoogleCalendarService:
             ).execute()
             return True
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to update booking event in Google Calendar: %s", exc)
+            logger.exception(
+                "Failed to update booking event in Google Calendar: %s", exc
+            )
             return False
 
-    async def get_busy_intervals(self, date_dt: datetime) -> list[tuple[datetime, datetime]]:
+    async def get_busy_intervals(
+        self, date_dt: datetime
+    ) -> list[tuple[datetime, datetime]]:
         """
         Возвращает занятые интервалы времени в часовом поясе Екатеринбурга (UTC+5).
         """
@@ -87,26 +103,38 @@ class GoogleCalendarService:
 
         # Ограничиваем диапазон поиска сутками
         local_tz = timezone(timedelta(hours=5))
-        local_start = datetime(date_dt.year, date_dt.month, date_dt.day, 0, 0, 0, tzinfo=local_tz)
-        local_end = datetime(date_dt.year, date_dt.month, date_dt.day, 23, 59, 59, tzinfo=local_tz)
+        local_start = datetime(
+            date_dt.year, date_dt.month, date_dt.day, 0, 0, 0, tzinfo=local_tz
+        )
+        local_end = datetime(
+            date_dt.year, date_dt.month, date_dt.day, 23, 59, 59, tzinfo=local_tz
+        )
 
         time_min = local_start.isoformat()
         time_max = local_end.isoformat()
 
         try:
-            events_result = service.events().list(
-                calendarId=self.settings.google_calendar_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-            ).execute()
-            
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=self.settings.google_calendar_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+
             events = events_result.get("items", [])
             busy_intervals = []
             for event in events:
-                start_raw = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
-                end_raw = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
+                start_raw = event.get("start", {}).get("dateTime") or event.get(
+                    "start", {}
+                ).get("date")
+                end_raw = event.get("end", {}).get("dateTime") or event.get(
+                    "end", {}
+                ).get("date")
                 if not start_raw or not end_raw:
                     continue
 
@@ -115,10 +143,18 @@ class GoogleCalendarService:
                 busy_intervals.append((start_dt, end_dt))
             return busy_intervals
         except Exception as exc:
-            logger.exception("Failed to retrieve Google Calendar busy intervals: %s", exc)
+            logger.exception(
+                "Failed to retrieve Google Calendar busy intervals: %s", exc
+            )
             return []
 
-    async def create_booking_event(self, booking_summary: str, description: str, start_dt: datetime, end_dt: datetime) -> str | None:
+    async def create_booking_event(
+        self,
+        booking_summary: str,
+        description: str,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> str | None:
         """
         Создает новое событие в Google Calendar и возвращает его eventId.
         """
@@ -139,15 +175,21 @@ class GoogleCalendarService:
                     "timeZone": "Asia/Yekaterinburg",
                 },
             }
-            created_event = service.events().insert(
-                calendarId=self.settings.google_calendar_id,
-                body=event_body,
-            ).execute()
+            created_event = (
+                service.events()
+                .insert(
+                    calendarId=self.settings.google_calendar_id,
+                    body=event_body,
+                )
+                .execute()
+            )
             return created_event.get("id")
         except Exception as exc:
-            logger.exception("Failed to create booking event in Google Calendar: %s", exc)
+            logger.exception(
+                "Failed to create booking event in Google Calendar: %s", exc
+            )
             return None
-        
+
     async def delete_booking_event(self, event_id: str) -> bool:
         """
         Удаляет событие из Google Calendar по его eventId.
@@ -163,5 +205,7 @@ class GoogleCalendarService:
             ).execute()
             return True
         except Exception as exc:
-            logger.exception("Failed to delete booking event in Google Calendar: %s", exc)
+            logger.exception(
+                "Failed to delete booking event in Google Calendar: %s", exc
+            )
             return False
