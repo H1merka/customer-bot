@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -115,3 +116,11 @@ class StudioSetting(Base):
 
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DayOff(Base):
+    __tablename__ = "days_off"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    google_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

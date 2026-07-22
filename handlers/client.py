@@ -11,7 +11,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, fil
 
 from config.settings import get_settings, BASE_DIR
 from database.connection import AsyncSessionFactory
-from database.models import Booking, BookingStatus, StudioSetting, User
+from database.models import Booking, BookingStatus, StudioSetting, User, DayOff
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
 from sqlalchemy import select
@@ -38,6 +38,13 @@ SERVICES_WITH_ZONE = {
 SERVICES_WITH_MEDICAL = {
     SERVICE_OPTIONS["piercing"],
     SERVICE_OPTIONS["consultation"]
+}
+
+# Группа А: услуги с 30-минутными слотами и соответствующей сеткой
+SERVICES_GROUP_A = {
+    SERVICE_OPTIONS["cleaning"],
+    SERVICE_OPTIONS["jewelry"],
+    SERVICE_OPTIONS["anodizing"]
 }
 
 PIERCING_ZONES = {
@@ -494,14 +501,32 @@ async def handle_booking_back(update: Update, context: ContextTypes.DEFAULT_TYPE
     await transition_to_state(update, context, prev_state, edit_message=True)
 
 
-async def get_free_slots_for_date(calendar_service: GoogleCalendarService, target_date: datetime) -> list[datetime]:
+async def get_free_slots_for_date(
+    calendar_service: GoogleCalendarService,
+    target_date: datetime,
+    selected_service: str | None
+) -> list[datetime]:
     local_tz = timezone(timedelta(hours=5))
+    
+    # Сначала проверяем, не объявлен ли день выходным в базе данных
+    async with AsyncSessionFactory() as session:
+        day_off = await session.scalar(
+            select(DayOff).where(DayOff.date == target_date.date())
+        )
+        if day_off is not None:
+            return []  # Если выходной, то свободных слотов нет вообще
+
     busy_intervals = await calendar_service.get_busy_intervals(target_date)
 
-    # Шаг 2а: Сетка слотов начинается с 14.00, заканчивается (старт последнего слота) в 20.00
-    # Длительность слота: 1 час. Интервал (перерыв): 1 час.
-    working_hours = ["14:00", "16:00", "18:00", "20:00"]
-    slot_duration = timedelta(hours=1)
+    # Выбор сетки времени и длительности в зависимости от выбранной услуги
+    if selected_service in SERVICES_GROUP_A:
+        # Сетка А: 5 слотов с интервалом в 1 час, длительность 30 минут
+        working_hours = ["15:30", "16:30", "17:30", "18:30", "19:30"]
+        slot_duration = timedelta(minutes=30)
+    else:
+        # Сетка Б (для остальных услуг): 7 слотов с интервалом в 1 час, длительность 1 час
+        working_hours = ["14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+        slot_duration = timedelta(hours=1)
 
     free_slots = []
     now = datetime.now(timezone.utc)
@@ -566,7 +591,9 @@ async def process_date_availability(update: Update, context: ContextTypes.DEFAUL
     else:
         checking_msg = await update.effective_message.reply_text("Минутку, сверяемся с календарем студии...")
 
-    free_slots = await get_free_slots_for_date(calendar_service, target_date)
+    # Извлечение названия услуги для получения правильной временной сетки
+    selected_service = context.user_data.get("selected_service")
+    free_slots = await get_free_slots_for_date(calendar_service, target_date, selected_service)
 
     if checking_msg:
         try:
@@ -726,7 +753,6 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["selected_service"] = service_name
     context.user_data["history"] = ["service_selection"]
 
-    # Шаг 2в: Апсайз и Даунсайз теперь переходят к выбору зоны пирсинга
     if service_key in ["piercing", "apsize", "downsize"]:
         await transition_to_state(update, context, "piercing_zone_selection", edit_message=True)
     else:
@@ -863,8 +889,6 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         if age < 18:
             next_state = "await_parent_name"
         else:
-            # Шаг 2б и 2в: "Прокол" и "Консультация" идут на мед. вопросы.
-            # "Апсайз" и "Даунсайз" идут сразу на выбор даты (медицинские вопросы не нужны)
             if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
                 next_state = "medical_question_1"
             else:
@@ -889,8 +913,6 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await notify_admins_about_minor(update, context, client_age, parent_name, parent_phone)
 
-        # Шаг 2б и 2в: "Прокол" и "Консультация" идут на мед. вопросы.
-        # "Апсайз" и "Даунсайз" идут сразу на выбор даты
         if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
             next_state = "medical_question_1"
         else:
@@ -1034,7 +1056,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
         if update.effective_user is None:
             return
 
-        # Идентификация чата и топика Сообщений Канала (Channel Direct Messages)
         chat_id = update.effective_chat.id if update.effective_chat else None
         direct_messages_topic_id = None
         if update.effective_message:
@@ -1049,12 +1070,14 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 await query.edit_message_text("Сначала требуется регистрация. Попробуйте /start.")
                 return
 
+            selected_service = context.user_data.get("selected_service", "Unknown")
+
             booking = Booking(
                 user_id=user.telegram_id,
                 client_name=context.user_data.get("client_name", "Unknown"),
                 client_phone=context.user_data.get("client_phone", ""),
                 client_age=context.user_data.get("client_age", 0),
-                service_name=context.user_data.get("selected_service", "Unknown"),
+                service_name=selected_service,
                 piercing_zone=context.user_data.get("temp_piercing_zone_name"),
                 piercing_type=context.user_data.get("temp_piercing_type"),
                 parent_name=context.user_data.get("parent_name"),
@@ -1068,7 +1091,6 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
                 skin_disease=context.user_data.get("medical_answers", {}).get("skin_disease"),
                 date_time=slot_dt.replace(tzinfo=None),
                 status=BookingStatus.CONFIRMED,
-                # Сохраняем связующие параметры чата Сообщений Канала
                 chat_id=chat_id,
                 direct_messages_topic_id=direct_messages_topic_id,
             )
@@ -1076,8 +1098,11 @@ async def handle_booking_callback(update: Update, context: ContextTypes.DEFAULT_
             await session.commit()
             await session.refresh(booking)
 
-            # Шаг 2а: Время окончания события вычисляется с учетом 1 часа длительности
-            end_dt = slot_dt + timedelta(hours=1)
+            # Вычисление времени окончания события в зависимости от типа услуги
+            if selected_service in SERVICES_GROUP_A:
+                end_dt = slot_dt + timedelta(minutes=30)
+            else:
+                end_dt = slot_dt + timedelta(hours=1)
             
             desc_lines = [
                 f"Клиент: {booking.client_name}",

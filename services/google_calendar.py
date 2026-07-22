@@ -147,3 +147,21 @@ class GoogleCalendarService:
         except Exception as exc:
             logger.exception("Failed to create booking event in Google Calendar: %s", exc)
             return None
+        
+    async def delete_booking_event(self, event_id: str) -> bool:
+        """
+        Удаляет событие из Google Calendar по его eventId.
+        """
+        service = await self._get_service()
+        if service is None:
+            return False
+
+        try:
+            service.events().delete(
+                calendarId=self.settings.google_calendar_id,
+                eventId=event_id,
+            ).execute()
+            return True
+        except Exception as exc:
+            logger.exception("Failed to delete booking event in Google Calendar: %s", exc)
+            return False
