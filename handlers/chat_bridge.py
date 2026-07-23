@@ -1,16 +1,15 @@
 # handlers/chat_bridge.py
 from __future__ import annotations
 
-import html  # Стандартная библиотека для экранирования HTML
 import logging
-
-from sqlalchemy import select
+import html  # Стандартная библиотека для экранирования HTML
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationHandlerStop, ContextTypes
+from telegram.ext import ContextTypes, ApplicationHandlerStop
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import SupportTicket, SupportTicketStatus, User, UserRole
+from sqlalchemy import select
 from handlers.common import build_main_menu
 
 logger = logging.getLogger(__name__)
@@ -149,39 +148,14 @@ async def create_support_ticket(
 
         await session.commit()
 
-    chat_id_str = str(update.effective_chat.id)
-    if chat_id_str.startswith("-100"):
-        chat_id_clean = chat_id_str[4:]
-    else:
-        chat_id_clean = chat_id_str
-
-    # Извлекаем ID топика прямого сообщения канала (direct_messages_topic) или ID треда форума
-    thread_id = None
-    if update.effective_message:
-        if update.effective_message.direct_messages_topic:
-            thread_id = update.effective_message.direct_messages_topic.topic_id
-        elif update.effective_message.message_thread_id:
-            thread_id = update.effective_message.message_thread_id
-
-    # ИСПРАВЛЕНИЕ: Используем трехкомпонентный формат ссылки t.me/c/CHAT_ID/TOPIC_ID/MESSAGE_ID
-    if thread_id:
-        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
-        discussion_text = (
-            f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
-        )
-    else:
-        discussion_text = (
-            "Тема в сообщениях канала: личные сообщения (ссылка недоступна)"
-        )
-
+    # Отправка уведомления администраторам (строка со ссылкой на топик полностью удалена)
     for admin_id in all_admins:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
                 text=(
                     f"⚠️ <b>Новый запрос поддержки!</b>\n\n"
-                    f"Клиент: {client_name} (ID: {client_id})\n"
-                    f"{discussion_text}"
+                    f"Клиент: {client_name} (ID: {client_id})"
                 ),
                 parse_mode="HTML",
             )
@@ -197,6 +171,13 @@ async def create_support_ticket(
             [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
         ),
     }
+
+    thread_id = None
+    if update.effective_message:
+        if update.effective_message.direct_messages_topic:
+            thread_id = update.effective_message.direct_messages_topic.topic_id
+        elif update.effective_message.message_thread_id:
+            thread_id = update.effective_message.message_thread_id
 
     if getattr(update.effective_chat, "is_direct_messages", False):
         if thread_id:
