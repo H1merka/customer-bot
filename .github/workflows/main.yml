@@ -1,0 +1,102 @@
+# .github/workflows/main.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      # Настройка тестовой СУБД PostgreSQL (если потребуются интеграционные тесты с PG)
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_password
+          POSTGRES_DB: customer_bot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev build-essential
+
+      - name: Install Project Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Устанавливаем дополнительные пакеты для проведения тестирования
+          pip install pytest pytest-asyncio pytest-mock ruff aiosqlite
+
+      - name: Run Ruff Linter
+        run: ruff check .
+
+      - name: Run Ruff Formatter Check
+        run: ruff format --check .
+
+      - name: Run Tests with Pytest
+        env:
+          # Передаем заглушки для переменных окружения на этапе тестирования
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
+          BOT_TOKEN: 123456:ABC-def123456
+          GOOGLE_CALENDAR_ID: primary
+        run: pytest -v
+
+  deploy:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            cd /opt/piercing_studio_bot
+            git pull origin main
+            
+            # Обновление переменных окружения из секретов GitHub на сервере
+            echo "BOT_TOKEN=${{ secrets.BOT_TOKEN }}" > .env
+            echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+            echo "GOOGLE_CALENDAR_ID=${{ secrets.GOOGLE_CALENDAR_ID }}" >> .env
+            echo "ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}" >> .env
+            echo "LOG_LEVEL=${{ secrets.LOG_LEVEL }}" >> .env
+            echo "GOOGLE_APPLICATION_CREDENTIALS=/app/google_creds.json" >> .env
+            
+            # Безопасная запись Google Credentials из секрета в файл на сервере
+            echo '${{ secrets.GOOGLE_CREDS_JSON }}' > google_creds.json
+            
+            # Пересборка и перезапуск Docker-контейнеров
+            docker compose down
+            docker compose up -d --build
+            
+            # Очистка неиспользуемых Docker ресурсов
+            docker system prune -f

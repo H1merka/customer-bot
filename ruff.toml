@@ -1,0 +1,32 @@
+# ruff.toml
+target-version = "py311"
+line-length = 88
+
+[lint]
+# Список активированных групп правил статического анализа
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes (базовые ошибки синтаксиса и импортов)
+    "I",     # isort (сортировка импортов)
+    "C90",   # mccabe (цикломатическая сложность кода)
+    "N",     # pep8-naming (соответствие именования PEP8)
+    "UP",    # pyupgrade (соответствие современным стандартам синтаксиса Python)
+    "B",     # flake8-bugbear (поиск потенциальных багов)
+    "A",     # flake8-builtins (предотвращение затенения встроенных имен)
+    "RUF",   # Специфичные правила Ruff
+    "ASYNC"  # Проверки для асинхронного программирования (flake8-async)
+]
+ignore = [
+    "A003",  # Разрешаем переопределять встроенные имена в качестве атрибутов классов (например, id, key)
+]
+
+[lint.mccabe]
+# Максимально допустимая цикломатическая сложность функций
+max-complexity = 12
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"

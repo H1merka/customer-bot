@@ -8,12 +8,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SERVICE_OPTIONS = {
     "piercing": "Прокол",
-    "apsize": "Апсайз",
-    "downsize": "Даунсайз",
+    "apsize": "Апсайз(увеличение украшения)",
+    "downsize": "Даунсайз(уменьшение украшения)",
     "cleaning": "Чистка украшения",
     "consultation": "Консультация",
     "jewelry": "Покупка украшения",
-    "anodizing": "Анодирование титана",
+    "anodizing": "Анодирование титана украшения",
 }
 
 # Наборы услуг для определения логики флоу
