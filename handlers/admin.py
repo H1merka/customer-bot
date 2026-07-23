@@ -3,38 +3,37 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime, date, time, timezone, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
+from sqlalchemy import or_, select
+from sqlalchemy.orm import joinedload
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
     filters,
-    ApplicationHandlerStop,
 )
-
-from config.settings import get_settings
-from database.connection import AsyncSessionFactory
-from database.models import (
-    StudioSetting,
-    User,
-    UserRole,
-    DayOff,
-    Booking,
-    BookingStatus,
-    MediaTemplate,
-)
-from sqlalchemy import select, or_
-from sqlalchemy.orm import joinedload
-from services.google_calendar import GoogleCalendarService
 
 # Прямой импорт из constants (разрывает циклическую зависимость)
 from config.constants import (
+    DEFAULT_STAGE_TEXTS,
     PIERCING_ZONES,
     STAGE_LABELS,
-    DEFAULT_STAGE_TEXTS,
 )
+from config.settings import get_settings
+from database.connection import AsyncSessionFactory
+from database.models import (
+    Booking,
+    BookingStatus,
+    DayOff,
+    MediaTemplate,
+    StudioSetting,
+    User,
+    UserRole,
+)
+from services.google_calendar import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

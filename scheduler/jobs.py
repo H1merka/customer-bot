@@ -4,12 +4,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from telegram.ext import Application
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import Booking, BookingStatus
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -61,7 +61,7 @@ async def send_24h_reminders(app: Application) -> None:
                         "Отправлено напоминание в ЛС для записи ID %s (топик в Сообщениях канала не найден)",
                         booking.id,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.exception(
                     "Failed to send reminder for booking %s: %s", booking.id, exc
                 )

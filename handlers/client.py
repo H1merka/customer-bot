@@ -3,46 +3,69 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import select
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update,
-    ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
 )
 from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+# Импорт всех настроек, лимитов, вопросников и хелперов очистки из констант (DRY, уход от круговых импортов)
+from config.constants import (
+    BASE_DIR,
+    DEFAULT_STAGE_TEXTS,
+    MEDICAL_QUESTIONS,
+    PIERCING_ZONES,
+    SERVICE_OPTIONS,
+    SERVICES_GROUP_A,
+    SERVICES_WITH_MEDICAL,
+    SERVICES_WITH_ZONE,
+    clear_booking_session,
+)
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import (
     Booking,
     BookingStatus,
-    StudioSetting,
-    User,
     DayOff,
     MediaTemplate,
+    StudioSetting,
+    User,
 )
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
-from sqlalchemy import select
-
-# Импорт всех настроек, лимитов, вопросников и хелперов очистки из констант (DRY, уход от круговых импортов)
-from config.constants import (
-    BASE_DIR,
-    SERVICE_OPTIONS,
-    SERVICES_WITH_ZONE,
-    SERVICES_WITH_MEDICAL,
-    SERVICES_GROUP_A,
-    PIERCING_ZONES,
-    DEFAULT_STAGE_TEXTS,
-    MEDICAL_QUESTIONS,
-    clear_booking_session,
-)
 
 logger = logging.getLogger(__name__)
+
+
+def get_allowed_booking_range() -> tuple[date, date]:
+    """
+    Возвращает доступный диапазон дат для записи обычных пользователей:
+    с 1 числа текущего месяца по 15 число следующего месяца включительно.
+    Расчет производится по местному времени Екатеринбурга (UTC+5).
+    """
+    local_tz = timezone(timedelta(hours=5))
+    now_local = datetime.now(local_tz).date()
+
+    # Старт: 1 число текущего месяца
+    start_date = now_local.replace(day=1)
+
+    # Конец: 15 число следующего месяца
+    if now_local.month == 12:
+        next_month = 1
+        next_year = now_local.year + 1
+    else:
+        next_month = now_local.month + 1
+        next_year = now_local.year
+
+    end_date = date(next_year, next_month, 15)
+    return start_date, end_date
 
 
 async def get_zone_media_payload(
@@ -587,9 +610,10 @@ async def initiate_medical_review(
     client_age = context.user_data.get("client_age", "Не указан")
     medical_answers = context.user_data.get("medical_answers", {})
 
-    from database.models import SupportTicket, SupportTicketStatus, User, UserRole
-    from database.connection import AsyncSessionFactory
     from sqlalchemy import select
+
+    from database.connection import AsyncSessionFactory
+    from database.models import SupportTicket, SupportTicketStatus, User, UserRole
 
     async with AsyncSessionFactory() as session:
         # Автоматически создаем или открываем тикет в режиме ожидания разбора
@@ -629,7 +653,7 @@ async def initiate_medical_review(
             thread_id = update.effective_message.message_thread_id
 
     if thread_id:
-        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
+        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
         discussion_text = (
             f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
         )
@@ -728,7 +752,7 @@ async def get_free_slots_for_date(
         slot_duration = timedelta(hours=1)
 
     free_slots = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for hw in working_hours:
         hour, minute = map(int, hw.split(":"))
@@ -1229,6 +1253,19 @@ async def handle_booking_input(
                     reply_markup=build_back_button(),
                 )
                 return
+
+            # Валидация доступного периода бронирования
+            start_date, end_date = get_allowed_booking_range()
+            if not (start_date <= input_date.date() <= end_date):
+                start_str = start_date.strftime("%d.%m.%Y")
+                end_str = end_date.strftime("%d.%m.%Y")
+                await update.effective_message.reply_text(
+                    f"Извините, сейчас запись доступна только на период с <b>{start_str}</b> по <b>{end_str}</b>.\n"
+                    f"Пожалуйста, введите другую дату из этого диапазона (ДД.ММ.ГГГГ):",
+                    reply_markup=build_back_button(),
+                    parse_mode="HTML",
+                )
+                return
         except ValueError:
             await update.effective_message.reply_text(
                 "Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ (например, 25.07.2026):",
@@ -1288,6 +1325,17 @@ async def handle_booking_callback(
             )
         except ValueError:
             await query.answer("Неверный формат даты в системе.", show_alert=True)
+            return
+
+        # Валидация диапазона при перелистывании дат кнопками календаря
+        start_date, end_date = get_allowed_booking_range()
+        if not (start_date <= target_date.date() <= end_date):
+            start_str = start_date.strftime("%d.%m.%Y")
+            end_str = end_date.strftime("%d.%m.%Y")
+            await query.answer(
+                f"Запись на эту дату невозможна. Допустимый интервал: с {start_str} по {end_str}.",
+                show_alert=True,
+            )
             return
 
         await process_date_availability(update, context, target_date, edit_message=True)

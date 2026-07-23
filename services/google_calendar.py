@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config.settings import Settings
@@ -40,7 +40,7 @@ class GoogleCalendarService:
                 "calendar", "v3", credentials=credentials, cache_discovery=False
             )
             return self._service
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Unable to initialize Google Calendar client: %s", exc)
             return None
 
@@ -64,7 +64,7 @@ class GoogleCalendarService:
                 .execute()
             )
             return events_result.get("items", [])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Failed to retrieve Google Calendar slots: %s", exc)
             return []
 
@@ -85,7 +85,7 @@ class GoogleCalendarService:
                 },
             ).execute()
             return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception(
                 "Failed to update booking event in Google Calendar: %s", exc
             )

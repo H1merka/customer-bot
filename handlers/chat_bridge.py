@@ -1,15 +1,16 @@
 # handlers/chat_bridge.py
 from __future__ import annotations
 
-import logging
 import html  # Стандартная библиотека для экранирования HTML
+import logging
+
+from sqlalchemy import select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ApplicationHandlerStop
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import SupportTicket, SupportTicketStatus, User, UserRole
-from sqlalchemy import select
 from handlers.common import build_main_menu
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,7 @@ async def create_support_ticket(
 
     # ИСПРАВЛЕНИЕ: Используем трехкомпонентный формат ссылки t.me/c/CHAT_ID/TOPIC_ID/MESSAGE_ID
     if thread_id:
-        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}/{thread_id}"
+        topic_link = f"https://t.me/c/{chat_id_clean}/{thread_id}"
         discussion_text = (
             f'Тема в сообщениях канала: <a href="{topic_link}">Перейти к обсуждению</a>'
         )

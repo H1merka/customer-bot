@@ -7,13 +7,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # Гарантируем, что корневая директория находится в пути поиска модулей
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database.models import Base
 from config.settings import Settings
+from database.models import Base
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -25,6 +26,7 @@ def event_loop():
     yield loop
     loop.close()
 
+
 @pytest.fixture(scope="session", autouse=True)
 def mock_settings():
     """Подменяет глобальные настройки приложения тестовыми значениями."""
@@ -35,10 +37,11 @@ def mock_settings():
             google_calendar_id="test_calendar_id",
             google_application_credentials=None,
             admin_telegram_ids=(123456789,),
-            log_level="DEBUG"
+            log_level="DEBUG",
         )
         mock_get.return_value = mock_s
         yield mock_s
+
 
 @pytest.fixture(scope="function")
 async def db_session():
@@ -47,19 +50,20 @@ async def db_session():
     Переопределяет AsyncSessionFactory во всем приложении для изоляции тестов от PostgreSQL.
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    
+
     # Создаем таблицы на основе Declarative Base моделей
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
+
     SessionFactory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    
+
     # Патчим фабрику сессий в модуле подключения
     with patch("database.connection.AsyncSessionFactory", SessionFactory):
         async with SessionFactory() as session:
             yield session
-            
+
     await engine.dispose()
+
 
 @pytest.fixture
 def mock_update():
@@ -69,19 +73,20 @@ def mock_update():
     update.effective_user.id = 123456789
     update.effective_user.username = "test_user"
     update.effective_user.full_name = "Test FullName"
-    
+
     update.effective_message = MagicMock()
     update.effective_message.text = "Hello Bot"
     update.effective_message.direct_messages_topic = None
     update.effective_message.message_thread_id = None
-    
+
     update.effective_chat = MagicMock()
     update.effective_chat.id = 987654321
     update.effective_chat.type = "private"
     update.effective_chat.is_direct_messages = False
-    
+
     update.callback_query = None
     return update
+
 
 @pytest.fixture
 def mock_context():
@@ -91,6 +96,7 @@ def mock_context():
     context.args = []
     context.bot = AsyncMock()
     return context
+
 
 @pytest.fixture
 def mock_calendar_service():

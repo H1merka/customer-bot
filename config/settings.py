@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
 
 from dotenv import load_dotenv
 
@@ -23,7 +22,7 @@ class Settings:
     google_application_credentials: str | None = os.getenv(
         "GOOGLE_APPLICATION_CREDENTIALS"
     )
-    admin_telegram_ids: Tuple[int, ...] = field(
+    admin_telegram_ids: tuple[int, ...] = field(
         default_factory=lambda: tuple(
             int(item.strip())
             for item in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",")
@@ -33,7 +32,7 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         return cls(
             bot_token=os.getenv("BOT_TOKEN", ""),
             database_url=os.getenv(

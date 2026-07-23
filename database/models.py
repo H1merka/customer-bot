@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, date
+from datetime import date, datetime
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
-    Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -47,7 +47,7 @@ class User(Base):
     has_healing_access: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    bookings: Mapped[list["Booking"]] = relationship(back_populates="user")
+    bookings: Mapped[list[Booking]] = relationship(back_populates="user")
 
 
 class Booking(Base):

@@ -10,23 +10,25 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     TypeHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from config.settings import get_settings
 from database.connection import init_db
-from handlers.admin import admin_handlers, settings_command, grant_healing_access
+from handlers.admin import admin_handlers, grant_healing_access, settings_command
 from handlers.chat_bridge import (
+    close_support_ticket,
     create_support_ticket,
+    handle_silent_mode_and_commands,
     handle_support_callback,
     restrict_to_channel_dms,
-    handle_silent_mode_and_commands,
-    close_support_ticket,
 )
 from handlers.client import client_handlers
-from handlers.common import help_command, handle_channel_start, start_command
+from handlers.common import handle_channel_start, help_command, start_command
 from scheduler.jobs import send_24h_reminders  # Импорт фоновой задачи
 
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -35,6 +37,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобальный обработчик исключений для предотвращения аварийного завершения работы."""
+    logger.error(
+        "Исключение при обработке обновления %s:", update, exc_info=context.error
+    )
 
 
 async def post_init(application: Application) -> None:
@@ -51,9 +60,24 @@ def build_application() -> Application:
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not configured")
 
-    application = (
-        ApplicationBuilder().token(settings.bot_token).post_init(post_init).build()
+    request_config = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=20.0,
+        read_timeout=20.0,
+        write_timeout=20.0,
+        pool_timeout=10.0,
     )
+
+    application = (
+        ApplicationBuilder()
+        .token(settings.bot_token)
+        .request(request_config)
+        .post_init(post_init)
+        .build()
+    )
+
+    # Регистрация глобального обработчика ошибок
+    application.add_error_handler(error_handler)
 
     # Фильтры разграничения доступов и тихого режима
     application.add_handler(TypeHandler(Update, restrict_to_channel_dms), group=-2)
@@ -125,7 +149,7 @@ def main() -> None:
             allowed_updates=["message", "callback_query"], bootstrap_retries=5
         )
         logger.info("Bot started")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Bot startup failed: %s", exc)
         raise
 
