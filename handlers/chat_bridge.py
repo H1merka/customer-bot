@@ -122,7 +122,6 @@ async def create_support_ticket(
         return
 
     client_id = update.effective_user.id
-    # Безопасное экранирование имени во избежание сбоев парсинга разметки
     client_name = html.escape(update.effective_user.full_name or "Unknown")
 
     async with AsyncSessionFactory() as session:
@@ -140,7 +139,6 @@ async def create_support_ticket(
             existing.status = SupportTicketStatus.OPEN
             existing.assigned_admin_id = None
 
-        # Получаем список динамических администраторов из БД и объединяем с .env
         db_admins = await session.scalars(
             select(User.telegram_id).where(User.role == UserRole.ADMIN)
         )
@@ -148,7 +146,6 @@ async def create_support_ticket(
 
         await session.commit()
 
-    # Отправка уведомления администраторам (строка со ссылкой на топик полностью удалена)
     for admin_id in all_admins:
         try:
             await context.bot.send_message(
@@ -164,9 +161,15 @@ async def create_support_ticket(
                 "Не удалось отправить оповещение админу %s: %s", admin_id, exc
             )
 
-    # Параметры отправки для корректной поддержки Channel Direct Messages
+    # ИСПРАВЛЕНО: Загрузка кастомного сообщения о создании тикета поддержки
+    from handlers.client import get_custom_text, DEFAULT_CUSTOM_TEXTS
+    support_summon_text = await get_custom_text(
+        "custom_txt:support_summon",
+        DEFAULT_CUSTOM_TEXTS["support_summon"]
+    )
+
     send_kwargs = {
-        "text": "Тикет поддержки открыт. Пирсер подключится к диалогу в ближайшее время.",
+        "text": support_summon_text,
         "reply_markup": InlineKeyboardMarkup(
             [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
         ),

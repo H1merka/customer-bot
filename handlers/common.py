@@ -61,10 +61,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user_id = update.effective_user.id
 
-    # 1. Принудительный сброс всех состояний сценария бронирования (DRY)
     clear_booking_session(context.user_data)
 
-    # 2. Поиск и закрытие активных тикетов поддержки (завершение диалога)
     async with AsyncSessionFactory() as session:
         from database.models import SupportTicket, SupportTicketStatus
 
@@ -79,10 +77,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ticket.assigned_admin_id = None
             await session.commit()
 
-    # Ссылаемся на admin-модуль локально во избежание круговых импортов
     from handlers.admin import check_if_admin, build_admin_main_menu
 
     is_admin = await check_if_admin(user_id, context)
+
+    # ИСПРАВЛЕНО: Загрузка кастомного приветственного текста из MediaTemplate
+    from handlers.client import get_custom_text, DEFAULT_CUSTOM_TEXTS
+    welcome_text = await get_custom_text("custom_txt:welcome", DEFAULT_CUSTOM_TEXTS["welcome"])
 
     if is_admin:
         admin_reply_markup = ReplyKeyboardMarkup(
@@ -104,7 +105,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup=start_reply_markup,
         )
 
-        # ИСПРАВЛЕНИЕ: Добавляем физическую кнопку «Старт» в ReplyKeyboardMarkup для обычных пользователей
         client_reply_markup = ReplyKeyboardMarkup(
             [[KeyboardButton("Старт"), KeyboardButton("В начало")]], resize_keyboard=True, is_persistent=True
         )
@@ -112,7 +112,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Клавиатура обновлена.", reply_markup=client_reply_markup
         )
         await update.effective_message.reply_text(
-            "Добро пожаловать в студию пирсинга.\nВыберите действие ниже.",
+            welcome_text,
             reply_markup=build_main_menu(),
         )
 

@@ -16,11 +16,13 @@ from telegram.ext import (
     filters,
 )
 
-# Прямой импорт из constants (разрывает циклическую зависимость)
+# Прямой импорт из constants
 from config.constants import (
     DEFAULT_STAGE_TEXTS,
     PIERCING_ZONES,
     STAGE_LABELS,
+    CUSTOM_TEXT_LABELS,
+    DEFAULT_CUSTOM_TEXTS,
 )
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
@@ -42,10 +44,6 @@ settings = get_settings()
 async def check_if_admin(
     user_id: int, context: ContextTypes.DEFAULT_TYPE | None = None
 ) -> bool:
-    """
-    Проверяет права администратора. Сначала проверяется статический .env-список,
-    затем in-memory кэш сессии, и только в конце совершается обращение к БД.
-    """
     if user_id in settings.admin_telegram_ids:
         return True
 
@@ -135,7 +133,6 @@ def build_admin_cancel_button() -> InlineKeyboardMarkup:
 
 
 def build_zones_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
-    """Вспомогательная клавиатура для выбора зоны в UI-настройках."""
     keyboard = []
     for zone_key, zone_info in PIERCING_ZONES.items():
         keyboard.append(
@@ -167,7 +164,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def grant_healing_access(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Legacy-команда быстрого доступа для обратной совместимости."""
     if update.effective_user is None or update.effective_message is None:
         return
 
@@ -313,7 +309,6 @@ async def handle_admin_setting_callback(
 async def handle_admin_ui_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Управление корневыми разделами кастомизации пользовательского интерфейса."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
@@ -342,21 +337,15 @@ async def handle_admin_ui_callback(
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
     elif action == "texts":
-        keyboard = []
-        for stage_key, label in STAGE_LABELS.items():
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        label, callback_data=f"admin_ui_txt:select:{stage_key}"
-                    )
-                ]
-            )
-        keyboard.append(
-            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")]
-        )
+        # ИСПРАВЛЕНО: Теперь выводим удобные категории для избежания перегруженности меню
+        keyboard = [
+            [InlineKeyboardButton("Этапы сценария записи", callback_data="admin_ui_txt_cat:stages")],
+            [InlineKeyboardButton("Служебные сообщения бота", callback_data="admin_ui_txt_cat:service")],
+            [InlineKeyboardButton("Медицинские вопросы", callback_data="admin_ui_txt_cat:medical")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
+        ]
         await query.edit_message_text(
-            "Управление текстами этапов записи:\n\n"
-            "Выберите этап для настройки его текста:",
+            "Управление текстами сообщений:\n\nВыберите необходимую категорию:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
     elif action == "back_to_ui":
@@ -377,10 +366,74 @@ async def handle_admin_ui_callback(
         )
 
 
+# НОВЫЙ МЕТОД: Обработка выбора категорий текстов
+async def handle_admin_ui_txt_cat_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    if not await check_if_admin(update.effective_user.id, context):
+        await query.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    data = query.data or ""
+    category = data.split(":", 1)[1]
+
+    if category == "stages":
+        keyboard = []
+        for stage_key, label in STAGE_LABELS.items():
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        label, callback_data=f"admin_ui_txt:select:{stage_key}"
+                    )
+                ]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")]
+        )
+        await query.edit_message_text(
+            "Управление текстами этапов записи:\n\n"
+            "Выберите этап для настройки его текста:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    elif category == "service":
+        keyboard = [
+            [InlineKeyboardButton("Приветственное сообщение", callback_data="admin_ui_txt:select_custom:welcome")],
+            [InlineKeyboardButton("Отказ в инструкции заживления", callback_data="admin_ui_txt:select_custom:healing_denied")],
+            [InlineKeyboardButton("Вызов пирсера (из меню)", callback_data="admin_ui_txt:select_custom:support_summon")],
+            [InlineKeyboardButton("Вызов специалиста (мед. анкета)", callback_data="admin_ui_txt:select_custom:specialist_review")],
+            [InlineKeyboardButton("Подтверждение записи", callback_data="admin_ui_txt:select_custom:booking_confirmed")],
+            [InlineKeyboardButton("Инструкция по предоплате", callback_data="admin_ui_txt:select_custom:prepayment_info")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
+        ]
+        await query.edit_message_text(
+            "Управление служебными сообщениями:\n\n"
+            "Выберите сообщение для настройки:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    elif category == "medical":
+        keyboard = [
+            [InlineKeyboardButton("Вопрос 1: Заболевания крови", callback_data="admin_ui_txt:select_custom:medical_q1")],
+            [InlineKeyboardButton("Вопрос 2: Свертываемость", callback_data="admin_ui_txt:select_custom:medical_q2")],
+            [InlineKeyboardButton("Вопрос 3: Принимаемые лекарства", callback_data="admin_ui_txt:select_custom:medical_q3")],
+            [InlineKeyboardButton("Вопрос 4: Хронические заболевания", callback_data="admin_ui_txt:select_custom:medical_q4")],
+            [InlineKeyboardButton("Вопрос 5: Заживление ран", callback_data="admin_ui_txt:select_custom:medical_q5")],
+            [InlineKeyboardButton("Вопрос 6: Кожные заболевания", callback_data="admin_ui_txt:select_custom:medical_q6")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
+        ]
+        await query.edit_message_text(
+            "Управление вопросами медицинской анкеты:\n\n"
+            "Выберите вопрос для редактирования текста:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
 async def handle_admin_ui_img_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Управление изображениями зон проколов (изменение, сброс, удаление)."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
@@ -451,7 +504,6 @@ async def handle_admin_ui_img_callback(
 async def handle_admin_ui_txt_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Управление динамическими текстами этапов сценария бронирования."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
@@ -497,11 +549,17 @@ async def handle_admin_ui_txt_callback(
                 "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
                 "- <code>{{date_str}}</code> (дата бронирования)"
             )
+        elif stage_key == "await_date":
+            placeholder_info = (
+                "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
+                "- <code>{{start_date}}</code> (дата начала записи)\n"
+                "- <code>{{end_date}}</code> (дата окончания записи)"
+            )
         else:
             placeholder_info = "Для этого этапа динамические плейсхолдеры отсутствуют."
 
         context.user_data["admin_state"] = "await_ui_text_update"
-        context.user_data["edit_text_key"] = stage_key
+        context.user_data["edit_text_key"] = f"stage_txt:{stage_key}" # Сохраняем полный составной ключ
 
         await query.edit_message_text(
             f"Редактирование текста для этапа: <b>{stage_label}</b>\n\n"
@@ -510,16 +568,133 @@ async def handle_admin_ui_txt_callback(
             f"{placeholder_info}\n\n"
             f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]
+                [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
+            ),
+            parse_mode="HTML",
+        )
+
+    # ИСПРАВЛЕНО: Добавлен флоу редактирования новых кастомизируемых сообщений
+    elif sub_action.startswith("select_custom:"):
+        custom_key = sub_action.split(":", 1)[1]
+        label = CUSTOM_TEXT_LABELS.get(custom_key, custom_key)
+        default_text = DEFAULT_CUSTOM_TEXTS.get(custom_key, "")
+
+        async with AsyncSessionFactory() as session:
+            template = await session.scalar(
+                select(MediaTemplate).where(
+                    MediaTemplate.key == f"custom_txt:{custom_key}"
+                )
+            )
+            current_text = (
+                template.value
+                if template and template.value
+                else default_text
+            )
+
+        placeholder_info = ""
+        if custom_key == "booking_confirmed":
+            placeholder_info = (
+                "⚠️ <b>Доступные динамические плейсхолдеры:</b>\n"
+                "- <code>{{slot_display}}</code> (дата и время сеанса)\n"
+                "- <code>{{address_text}}</code> (адрес студии)"
+            )
+        else:
+            placeholder_info = "Для этого сообщения динамические плейсхолдеры отсутствуют."
+
+        context.user_data["admin_state"] = "await_ui_text_update"
+        context.user_data["edit_text_key"] = f"custom_txt:{custom_key}" # Сохраняем полный составной ключ
+
+        await query.edit_message_text(
+            f"Редактирование сообщения: <b>{label}</b>\n\n"
+            f"📝 <b>Текущий текст сообщения:</b>\n"
+            f"<blockquote>{html.escape(current_text)}</blockquote>\n\n"
+            f"{placeholder_info}\n\n"
+            f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
             ),
             parse_mode="HTML",
         )
 
 
+# НОВЫЙ МЕТОД: Обработка клика по кнопке "Одобрить предоплату" администратором
+async def handle_admin_prepayment_approval(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    if not await check_if_admin(update.effective_user.id, context):
+        await query.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    data = query.data or ""
+    client_id = int(data.split(":", 1)[1])
+    
+    async with AsyncSessionFactory() as session:
+        user = await session.scalar(select(User).where(User.telegram_id == client_id))
+        if user:
+            user.is_prepaid = True
+            await session.commit()
+            client_name = user.full_name
+        else:
+            client_name = "Пользователь"
+
+    admin_username = f"@{update.effective_user.username}" if update.effective_user.username else update.effective_user.full_name
+    await query.answer("Предоплата подтверждена!")
+    
+    # Обновляем сообщение-оповещение у всех админов
+    original_text = query.message.text if query.message else "Запрос на предоплату"
+    await query.edit_message_text(
+        text=f"✅ {original_text}\n\n<b>[ОДОБРЕНО]</b> Администратор {admin_username} подтвердил получение предоплаты.",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    
+    # Отправляем сообщение-уведомление (Вариант Б) клиенту
+    client_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗓️ Выбрать дату записи", callback_data="resume_after_pay")]
+    ])
+    
+    # Определяем топик для отправки, если пирсинг оформлялся через Channel DMs
+    chat_id = client_id
+    topic_id = None
+    
+    async with AsyncSessionFactory() as session:
+        latest_booking = await session.scalar(
+            select(Booking)
+            .where(Booking.user_id == client_id)
+            .order_by(Booking.id.desc())
+            .limit(1)
+        )
+        if latest_booking:
+            chat_id = latest_booking.chat_id or client_id
+            topic_id = latest_booking.direct_messages_topic_id
+
+    send_kwargs = {
+        "chat_id": chat_id,
+        "text": "Ваша предоплата успешно подтверждена администратором. Нажмите кнопку ниже, чтобы выбрать желаемую дату записи.",
+        "reply_markup": client_keyboard,
+    }
+    if topic_id:
+        send_kwargs["direct_messages_topic_id"] = topic_id
+        
+    try:
+        await context.bot.send_message(**send_kwargs)
+        logger.info("Sent prepayment confirmation notification to user %s", client_id)
+    except Exception as exc:
+        logger.error("Failed to notify user %s about prepayment approval: %s", client_id, exc)
+        # Резервная прямая отправка в ЛС
+        try:
+            await context.bot.send_message(chat_id=client_id, text=send_kwargs["text"], reply_markup=client_keyboard)
+        except Exception:
+            pass
+
+
 async def handle_admin_photo_input(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработчик входящего графического контента от администратора."""
     if (
         update.effective_user is None
         or update.effective_message is None
@@ -543,7 +718,6 @@ async def handle_admin_photo_input(
         context.user_data.pop("admin_state", None)
         raise ApplicationHandlerStop()
 
-    # Извлечение самого качественного размера изображения
     file_id = update.effective_message.photo[-1].file_id
 
     async with AsyncSessionFactory() as session:
@@ -588,40 +762,47 @@ async def handle_admin_input(
 
     text = update.effective_message.text.strip()
 
+    # ИСПРАВЛЕНО: Валидация кастомных и эталонных ключей
     if admin_state == "await_ui_text_update":
-        stage_key = context.user_data.pop("edit_text_key", None)
-        if not stage_key:
+        full_key = context.user_data.pop("edit_text_key", None)
+        if not full_key:
             await update.effective_message.reply_text(
-                "Произошла ошибка: ключ этапа не найден. Начните редактирование заново.",
+                "Произошла ошибка: ключ текста не найден. Начните редактирование заново.",
                 reply_markup=build_admin_settings_menu(),
             )
             context.user_data.pop("admin_state", None)
             raise ApplicationHandlerStop()
 
-        # Валидация плейсхолдеров для исключения сбоя выполнения строковых шаблонов у клиентов
+        # Разделяем префикс и ключ
+        prefix, actual_key = full_key.split(":", 1)
+
         test_kwargs = {}
-        if stage_key == "await_tg_link_zone":
+        if full_key == "stage_txt:await_tg_link_zone":
             test_kwargs = {
                 "service_name": "Тест-услуга",
                 "zone_name": "Тест-зона",
                 "type_name": "Тест-тип",
             }
-        elif stage_key == "await_tg_link_simple":
+        elif full_key == "stage_txt:await_tg_link_simple":
             test_kwargs = {"service_name": "Тест-услуга"}
-        elif stage_key in ["select_slot", "no_slots"]:
+        elif full_key in ["stage_txt:select_slot", "stage_txt:no_slots"]:
             test_kwargs = {"date_str": "25.07.2026"}
+        elif full_key == "stage_txt:await_date":
+            test_kwargs = {"start_date": "01.07.2026", "end_date": "15.08.2026"}
+        elif full_key == "custom_txt:booking_confirmed":
+            test_kwargs = {"slot_display": "25.07.2026 в 15:30", "address_text": "Тест-адрес"}
 
         try:
             text.format(**test_kwargs)
         except (KeyError, ValueError, IndexError) as exc:
-            context.user_data["edit_text_key"] = stage_key
+            context.user_data["edit_text_key"] = full_key
             await update.effective_message.reply_text(
                 f"⚠️ <b>Ошибка разметки!</b>\n"
                 f"Ваш текст содержит некорректно оформленные фигурные скобки или отсутствующие плейсхолдеры. "
                 f"Ошибка: <code>{html.escape(str(exc))}</code>.\n\n"
                 f"Пожалуйста, исправьте текст и пришлите его заново:",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Отмена", callback_data="admin_ui:texts")]]
+                    [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
                 ),
                 parse_mode="HTML",
             )
@@ -630,19 +811,24 @@ async def handle_admin_input(
         async with AsyncSessionFactory() as session:
             template = await session.scalar(
                 select(MediaTemplate).where(
-                    MediaTemplate.key == f"stage_txt:{stage_key}"
+                    MediaTemplate.key == full_key
                 )
             )
             if template:
                 template.value = text
             else:
-                session.add(MediaTemplate(key=f"stage_txt:{stage_key}", value=text))
+                session.add(MediaTemplate(key=full_key, value=text))
             await session.commit()
 
         context.user_data.pop("admin_state", None)
-        stage_label = STAGE_LABELS.get(stage_key, stage_key)
+        
+        if prefix == "stage_txt":
+            label = STAGE_LABELS.get(actual_key, actual_key)
+        else:
+            label = CUSTOM_TEXT_LABELS.get(actual_key, actual_key)
+            
         await update.effective_message.reply_text(
-            f"Текст для этапа <b>{stage_label}</b> успешно сохранен в базе данных.\n\n"
+            f"Текст для <b>{label}</b> успешно сохранен в базе данных.\n\n"
             f"Возврат в меню настроек.",
             reply_markup=build_admin_settings_menu(),
             parse_mode="HTML",
@@ -775,7 +961,6 @@ async def handle_admin_input(
             )
             raise ApplicationHandlerStop()
 
-        # Формируем SQL-фильтр для поиска существующих подтвержденных записей
         clauses = []
         for d in valid_dates:
             start_dt = datetime.combine(d, time.min)
@@ -787,7 +972,6 @@ async def handle_admin_input(
         async with AsyncSessionFactory() as session:
             conflicting_bookings = []
             if clauses:
-                # Используем joinedload для упреждающей (eager) загрузки связи Booking.user
                 stmt = (
                     select(Booking)
                     .options(joinedload(Booking.user))
@@ -795,14 +979,12 @@ async def handle_admin_input(
                     .where(or_(*clauses))
                 )
                 res = await session.scalars(stmt)
-                # unique() обеспечивает консистентность объектов в кэше SQLAlchemy
                 conflicting_bookings = list(res.unique().all())
 
         context.user_data["temp_days_off_dates"] = [d.isoformat() for d in valid_dates]
         context.user_data["admin_state"] = "await_days_off_confirm"
 
         if conflicting_bookings:
-            # Группируем конфликтующие записи по датам
             by_date: dict[date, list[Booking]] = {}
             for b in conflicting_bookings:
                 by_date.setdefault(b.date_time.date(), []).append(b)
@@ -887,7 +1069,6 @@ async def handle_dayoff_confirm_callback(
     async with AsyncSessionFactory() as session:
         conflicting_bookings = []
         if clauses:
-            # Безопасная выборка с joinedload для предотвращения DetachedInstanceError при уведомлении
             stmt = (
                 select(Booking)
                 .options(joinedload(Booking.user))
@@ -899,7 +1080,6 @@ async def handle_dayoff_confirm_callback(
 
         calendar_service = GoogleCalendarService(get_settings())
 
-        # 1. Отмена конфликтующих записей, их удаление из Google Calendar и уведомление клиентов
         for booking in conflicting_bookings:
             booking.status = BookingStatus.CANCELLED
             if booking.google_event_id:
@@ -914,7 +1094,6 @@ async def handle_dayoff_confirm_callback(
             )
             try:
                 if booking.chat_id and booking.direct_messages_topic_id:
-                    # Отправляем сообщение в чат прямого диалога Сообщений канала (Channel DM)
                     await context.bot.send_message(
                         chat_id=booking.chat_id,
                         direct_messages_topic_id=booking.direct_messages_topic_id,
@@ -926,7 +1105,6 @@ async def handle_dayoff_confirm_callback(
                         booking.id,
                     )
                 else:
-                    # Резервный вариант — прямая отправка в ЛС пользователю
                     await context.bot.send_message(
                         chat_id=booking.user_id, text=notify_text, parse_mode="HTML"
                     )
@@ -942,15 +1120,12 @@ async def handle_dayoff_confirm_callback(
                     exc,
                 )
 
-        # 2. Сохранение выходных дней в БД и создание блокирующих событий в Google Calendar
         added_dates_count = 0
         for d in dates:
-            # Защита от дублей записей в БД
             exists = await session.scalar(select(DayOff).where(DayOff.date == d))
             if exists:
                 continue
 
-            # Блокировка всего дня (UTC+5)
             local_tz = timezone(timedelta(hours=5))
             start_dt = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=local_tz)
             end_dt = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=local_tz)
@@ -1014,6 +1189,10 @@ admin_handlers = [
         handle_dayoff_confirm_callback, pattern=r"^admin_dayoff_confirm:"
     ),
     CallbackQueryHandler(handle_admin_ui_callback, pattern=r"^admin_ui:"),
+    # ИСПРАВЛЕНО: Регистрация новых Callback-обработчиков для категорий текстов и одобрения предоплаты
+    CallbackQueryHandler(handle_admin_ui_txt_cat_callback, pattern=r"^admin_ui_txt_cat:"),
+    CallbackQueryHandler(handle_admin_prepayment_approval, pattern=r"^approve_pay:"),
+    
     CallbackQueryHandler(handle_admin_ui_img_callback, pattern=r"^admin_ui_img:"),
     CallbackQueryHandler(handle_admin_ui_txt_callback, pattern=r"^admin_ui_txt:"),
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input),

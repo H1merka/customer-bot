@@ -45,6 +45,8 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(default=UserRole.USER)
     has_healing_access: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Новое поле для фиксации предоплаты за текущий сеанс
+    is_prepaid: Mapped[bool] = mapped_column(Boolean, default=False)  
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     bookings: Mapped[list[Booking]] = relationship(back_populates="user")
