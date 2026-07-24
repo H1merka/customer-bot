@@ -50,8 +50,15 @@ async def post_init(application: Application) -> None:
     try:
         await init_db()
         logger.info("Database initialized successfully inside post_init")
+
+        # Восстановление запланированных задач рассылки из PostgreSQL
+        from scheduler.jobs import restore_broadcast_jobs
+
+        await restore_broadcast_jobs(application)
+        logger.info("Persistent broadcast jobs successfully loaded")
+
     except Exception as exc:
-        logger.exception("Database initialization failed: %s", exc)
+        logger.exception("Initialization processes failed: %s", exc)
         raise
 
 

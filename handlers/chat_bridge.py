@@ -1,15 +1,16 @@
 # handlers/chat_bridge.py
 from __future__ import annotations
 
-import logging
 import html  # Стандартная библиотека для экранирования HTML
+import logging
+
+from sqlalchemy import select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ApplicationHandlerStop
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import SupportTicket, SupportTicketStatus, User, UserRole
-from sqlalchemy import select
 from handlers.common import build_main_menu
 
 logger = logging.getLogger(__name__)
@@ -162,10 +163,10 @@ async def create_support_ticket(
             )
 
     # ИСПРАВЛЕНО: Загрузка кастомного сообщения о создании тикета поддержки
-    from handlers.client import get_custom_text, DEFAULT_CUSTOM_TEXTS
+    from handlers.client import DEFAULT_CUSTOM_TEXTS, get_custom_text
+
     support_summon_text = await get_custom_text(
-        "custom_txt:support_summon",
-        DEFAULT_CUSTOM_TEXTS["support_summon"]
+        "custom_txt:support_summon", DEFAULT_CUSTOM_TEXTS["support_summon"]
     )
 
     send_kwargs = {

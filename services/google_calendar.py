@@ -1,3 +1,4 @@
+# services/google_calendar.py
 from __future__ import annotations
 
 import logging
@@ -13,6 +14,30 @@ class GoogleCalendarService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._service: Any | None = None
+
+    def _get_authorized_http(self) -> Any | None:
+        """
+        Создает изолированный HTTP-клиент для текущего вызова во избежание гонки данных
+        и возникновения ошибок типа [SSL: UNEXPECTED_EOF_WHILE_READING].
+        """
+        if not self.settings.google_application_credentials:
+            logger.warning("Google application credentials are not configured.")
+            return None
+        try:
+            import google_auth_httplib2
+            import httplib2
+            from google.oauth2 import service_account
+
+            credentials = service_account.Credentials.from_service_account_file(
+                self.settings.google_application_credentials,
+                scopes=["https://www.googleapis.com/auth/calendar"],
+            )
+            # Новый Http-клиент создается под каждый сетевой запрос
+            http_client = httplib2.Http(timeout=20)
+            return google_auth_httplib2.AuthorizedHttp(credentials, http=http_client)
+        except Exception as exc:
+            logger.exception("Failed to create authorized HTTP client: %s", exc)
+            return None
 
     async def _get_service(self) -> Any | None:
         if self._service is not None:
@@ -48,7 +73,8 @@ class GoogleCalendarService:
         self, calendar_id: str = "primary"
     ) -> list[dict[str, Any]]:
         service = await self._get_service()
-        if service is None:
+        http_auth = self._get_authorized_http()
+        if service is None or http_auth is None:
             return []
 
         try:
@@ -61,7 +87,7 @@ class GoogleCalendarService:
                     singleEvents=True,
                     orderBy="startTime",
                 )
-                .execute()
+                .execute(http=http_auth)
             )
             return events_result.get("items", [])
         except Exception as exc:
@@ -72,7 +98,8 @@ class GoogleCalendarService:
         self, event_id: str, booking_summary: str, description: str
     ) -> bool:
         service = await self._get_service()
-        if service is None:
+        http_auth = self._get_authorized_http()
+        if service is None or http_auth is None:
             return False
 
         try:
@@ -83,7 +110,7 @@ class GoogleCalendarService:
                     "summary": booking_summary,
                     "description": description,
                 },
-            ).execute()
+            ).execute(http=http_auth)
             return True
         except Exception as exc:
             logger.exception(
@@ -98,7 +125,8 @@ class GoogleCalendarService:
         Возвращает занятые интервалы времени в часовом поясе Екатеринбурга (UTC+5).
         """
         service = await self._get_service()
-        if service is None:
+        http_auth = self._get_authorized_http()
+        if service is None or http_auth is None:
             return []
 
         # Ограничиваем диапазон поиска сутками
@@ -123,7 +151,7 @@ class GoogleCalendarService:
                     singleEvents=True,
                     orderBy="startTime",
                 )
-                .execute()
+                .execute(http=http_auth)
             )
 
             events = events_result.get("items", [])
@@ -159,7 +187,8 @@ class GoogleCalendarService:
         Создает новое событие в Google Calendar и возвращает его eventId.
         """
         service = await self._get_service()
-        if service is None:
+        http_auth = self._get_authorized_http()
+        if service is None or http_auth is None:
             return None
 
         try:
@@ -181,7 +210,7 @@ class GoogleCalendarService:
                     calendarId=self.settings.google_calendar_id,
                     body=event_body,
                 )
-                .execute()
+                .execute(http=http_auth)
             )
             return created_event.get("id")
         except Exception as exc:
@@ -195,14 +224,15 @@ class GoogleCalendarService:
         Удаляет событие из Google Calendar по его eventId.
         """
         service = await self._get_service()
-        if service is None:
+        http_auth = self._get_authorized_http()
+        if service is None or http_auth is None:
             return False
 
         try:
             service.events().delete(
                 calendarId=self.settings.google_calendar_id,
                 eventId=event_id,
-            ).execute()
+            ).execute(http=http_auth)
             return True
         except Exception as exc:
             logger.exception(

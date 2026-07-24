@@ -3,51 +3,48 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime, timedelta, timezone, date
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import select
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update,
-    ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
 )
 from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+from config.constants import (
+    BASE_DIR,
+    DEFAULT_CUSTOM_TEXTS,
+    DEFAULT_STAGE_TEXTS,
+    MEDICAL_QUESTIONS,
+    PIERCING_ZONES,
+    SERVICE_OPTIONS,
+    SERVICES_GROUP_A,
+    SERVICES_WITH_MEDICAL,
+    SERVICES_WITH_ZONE,
+    clear_booking_session,
+)
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import (
     Booking,
     BookingStatus,
+    DayOff,
+    MediaTemplate,
     StudioSetting,
     User,
     UserRole,
-    DayOff,
-    MediaTemplate,
 )
 from handlers.common import build_main_menu, register_user
 from services.google_calendar import GoogleCalendarService
-from sqlalchemy import select
-
-from config.constants import (
-    BASE_DIR,
-    SERVICE_OPTIONS,
-    SERVICES_WITH_ZONE,
-    SERVICES_WITH_MEDICAL,
-    SERVICES_GROUP_A,
-    PIERCING_ZONES,
-    DEFAULT_STAGE_TEXTS,
-    MEDICAL_QUESTIONS,
-    clear_booking_session,
-    CUSTOM_TEXT_LABELS,
-    DEFAULT_CUSTOM_TEXTS,
-)
 
 logger = logging.getLogger(__name__)
 
 
-# НОВЫЙ ВСПОМОГАТЕЛЬНЫЙ МЕТОД: Динамическое получение произвольного служебного текста из БД
 async def get_custom_text(key: str, default_value: str, **kwargs) -> str:
     """
     Получает динамический кастомный текст из базы данных (ключи вида custom_txt:...).
@@ -73,16 +70,16 @@ async def get_custom_text(key: str, default_value: str, **kwargs) -> str:
 def get_allowed_booking_range() -> tuple[date, date]:
     local_tz = timezone(timedelta(hours=5))
     now_local = datetime.now(local_tz).date()
-    
+
     start_date = now_local.replace(day=1)
-    
+
     if now_local.month == 12:
         next_month = 1
         next_year = now_local.year + 1
     else:
         next_month = now_local.month + 1
         next_year = now_local.year
-        
+
     end_date = date(next_year, next_month, 15)
     return start_date, end_date
 
@@ -279,6 +276,49 @@ def build_medical_keyboard(question_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def build_client_healing_zones_keyboard() -> InlineKeyboardMarkup:
+    """Генерирует клавиатуру зон проколов для клиентов."""
+    keyboard = []
+    for zone_key, zone_info in PIERCING_ZONES.items():
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    zone_info["name"],
+                    callback_data=f"client_healing:select_zone:{zone_key}",
+                )
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:main")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_client_healing_types_keyboard(zone_key: str) -> InlineKeyboardMarkup:
+    """
+    Генерирует клавиатуру типов проколов, используя порядковый индекс
+    для снижения размера callback_data до допустимого лимита в 64 байта.
+    """
+    zone_info = PIERCING_ZONES.get(zone_key)
+    if not zone_info:
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data="client_healing:zones")]]
+        )
+
+    keyboard = []
+    for idx, type_name in enumerate(zone_info["types"]):
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    type_name,
+                    callback_data=f"client_healing:select_type:{zone_key}:{idx}",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("⬅️ Назад", callback_data="client_healing:zones")]
+    )
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def transition_to_state(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -322,37 +362,43 @@ async def transition_to_state(
         reply_markup = build_back_button()
     elif state_name.startswith("medical_question_"):
         q_num = int(state_name.split("_")[-1])
-        # ИСПРАВЛЕНО: Загрузка текста медицинского вопроса из динамических настроек
-        text = await get_custom_text(f"custom_txt:medical_q{q_num}", DEFAULT_CUSTOM_TEXTS[f"medical_q{q_num}"])
+        text = await get_custom_text(
+            f"custom_txt:medical_q{q_num}", DEFAULT_CUSTOM_TEXTS[f"medical_q{q_num}"]
+        )
         reply_markup = build_medical_keyboard(q_num)
     elif state_name.startswith("await_medical_text_"):
         q_num = int(state_name.split("_")[-1])
         q_info = MEDICAL_QUESTIONS[q_num]
         text = q_info["detail_prompt"]
         reply_markup = build_back_button()
-        
-    # ИСПРАВЛЕНО: Состояние предоплаты
+
     elif state_name == "await_prepayment":
         user_id = update.effective_user.id
         async with AsyncSessionFactory() as session:
             user = await session.scalar(select(User).where(User.telegram_id == user_id))
             is_prepaid = user.is_prepaid if user else False
-            
+
         if is_prepaid:
-            # Предоплата уже подтверждена - пропускаем этот шаг
             context.user_data["booking_state"] = "await_date"
-            await transition_to_state(update, context, "await_date", edit_message=edit_message)
+            await transition_to_state(
+                update, context, "await_date", edit_message=edit_message
+            )
             return
 
-        text = await get_custom_text("custom_txt:prepayment_info", DEFAULT_CUSTOM_TEXTS["prepayment_info"])
+        text = await get_custom_text(
+            "custom_txt:prepayment_info", DEFAULT_CUSTOM_TEXTS["prepayment_info"]
+        )
         reply_markup = build_back_button()
-        
-        # Рассылаем оповещение о начале совершения предоплаты администраторам
+
         client_name = html.escape(update.effective_user.full_name or "Unknown")
-        client_username = f" (@{update.effective_user.username})" if update.effective_user.username else ""
+        client_username = (
+            f" (@{update.effective_user.username})"
+            if update.effective_user.username
+            else ""
+        )
         client_link = context.user_data.get("client_tg_link", "Не указана")
         selected_service = context.user_data.get("selected_service", "Не указана")
-        
+
         notify_text = (
             f"💳 <b>Поступил запрос на подтверждение предоплаты!</b>\n\n"
             f"<b>Клиент:</b> {client_name}{client_username} (ID: {user_id})\n"
@@ -360,35 +406,47 @@ async def transition_to_state(
             f"<b>Выбранная услуга:</b> {html.escape(selected_service)}\n\n"
             f"Ожидайте поступления средств на счет. После получения нажмите кнопку ниже:"
         )
-        
-        admin_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Подтвердить предоплату", callback_data=f"approve_pay:{user_id}")]
-        ])
-        
+
+        admin_keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить предоплату",
+                        callback_data=f"approve_pay:{user_id}",
+                    )
+                ]
+            ]
+        )
+
         async with AsyncSessionFactory() as session:
             db_admins = await session.scalars(
                 select(User.telegram_id).where(User.role == UserRole.ADMIN)
             )
             all_admins = set(get_settings().admin_telegram_ids) | set(db_admins)
-            
+
         for admin_id in all_admins:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=notify_text,
                     reply_markup=admin_keyboard,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
                 )
             except Exception as exc:
-                logger.warning("Failed to send prepayment notification to admin %s: %s", admin_id, exc)
+                logger.warning(
+                    "Failed to send prepayment notification to admin %s: %s",
+                    admin_id,
+                    exc,
+                )
 
     elif state_name == "await_date":
-        # ИСПРАВЛЕНО: Передаем доступный интервал дат в плейсхолдеры для вывода клиенту
         start_date, end_date = get_allowed_booking_range()
         start_str = start_date.strftime("%d.%m.%Y")
         end_str = end_date.strftime("%d.%m.%Y")
-        
-        text = await get_stage_text("await_date", start_date=start_str, end_date=end_str)
+
+        text = await get_stage_text(
+            "await_date", start_date=start_str, end_date=end_str
+        )
         reply_markup = build_back_button()
     elif state_name == "select_slot":
         req_date = context.user_data.get("requested_date")
@@ -417,44 +475,49 @@ async def transition_to_state(
         and context.user_data.get("selected_service") in SERVICES_WITH_ZONE
     )
 
+    sent_msg = None
     if edit_message and update.callback_query and not is_zone_flow_proceed:
         try:
-            await update.callback_query.edit_message_text(
+            sent_msg = await update.callback_query.edit_message_text(
                 text, reply_markup=reply_markup, parse_mode="HTML"
             )
         except Exception:
             if update.effective_chat:
                 kwargs = get_send_kwargs(update, text, reply_markup)
                 kwargs["parse_mode"] = "HTML"
-                await update.effective_chat.send_message(**kwargs)
+                sent_msg = await update.effective_chat.send_message(**kwargs)
             else:
-                await update.effective_message.reply_text(
+                sent_msg = await update.effective_message.reply_text(
                     text, reply_markup=reply_markup, parse_mode="HTML"
                 )
     else:
         if update.callback_query and not is_zone_flow_proceed:
             try:
-                await update.callback_query.edit_message_text(
+                sent_msg = await update.callback_query.edit_message_text(
                     text, reply_markup=reply_markup, parse_mode="HTML"
                 )
             except Exception:
                 if update.effective_chat:
                     kwargs = get_send_kwargs(update, text, reply_markup)
                     kwargs["parse_mode"] = "HTML"
-                    await update.effective_chat.send_message(**kwargs)
+                    sent_msg = await update.effective_chat.send_message(**kwargs)
                 else:
-                    await update.effective_message.reply_text(
+                    sent_msg = await update.effective_message.reply_text(
                         text, reply_markup=reply_markup, parse_mode="HTML"
                     )
         else:
             if update.effective_chat:
                 kwargs = get_send_kwargs(update, text, reply_markup)
                 kwargs["parse_mode"] = "HTML"
-                await update.effective_chat.send_message(**kwargs)
+                sent_msg = await update.effective_chat.send_message(**kwargs)
             else:
-                await update.effective_message.reply_text(
+                sent_msg = await update.effective_message.reply_text(
                     text, reply_markup=reply_markup, parse_mode="HTML"
                 )
+
+    if state_name == "await_prepayment" and sent_msg:
+        context.user_data["prepayment_message_id"] = sent_msg.message_id
+        context.user_data["prepayment_chat_id"] = sent_msg.chat_id
 
 
 async def handle_booking_back(
@@ -653,7 +716,6 @@ async def handle_booking_back(
         context.user_data.pop("parent_name", None)
     elif current_state == "await_parent_phone":
         context.user_data.pop("parent_phone", None)
-    # ИСПРАВЛЕНО: очистка при возврате с шага предоплаты
     elif current_state == "await_prepayment":
         pass
     elif current_state == "await_date":
@@ -682,9 +744,10 @@ async def initiate_medical_review(
     client_age = context.user_data.get("client_age", "Не указан")
     medical_answers = context.user_data.get("medical_answers", {})
 
-    from database.models import SupportTicket, SupportTicketStatus, User, UserRole
-    from database.connection import AsyncSessionFactory
     from sqlalchemy import select
+
+    from database.connection import AsyncSessionFactory
+    from database.models import SupportTicket, SupportTicketStatus, User, UserRole
 
     async with AsyncSessionFactory() as session:
         existing = await session.scalar(
@@ -741,18 +804,16 @@ async def initiate_medical_review(
                 "Не удалось отправить медицинский отчет админу %s: %s", admin_id, exc
             )
 
-    # ИСПРАВЛЕНО: Кастомизация сообщения о вызове специалиста
-    review_text = await get_custom_text("custom_txt:specialist_review", DEFAULT_CUSTOM_TEXTS["specialist_review"])
-    
+    review_text = await get_custom_text(
+        "custom_txt:specialist_review", DEFAULT_CUSTOM_TEXTS["specialist_review"]
+    )
+
     keyboard = [[InlineKeyboardButton("Закрыть диалог", callback_data="close_support")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    send_kwargs = get_send_kwargs(
-        update, review_text, reply_markup=reply_markup
-    )
+    send_kwargs = get_send_kwargs(update, review_text, reply_markup=reply_markup)
     await update.effective_chat.send_message(**send_kwargs)
 
 
-# ИСПРАВЛЕНО: После закрытия тикета клиенту отправляется переход к предоплате
 async def handle_resume_booking(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -767,7 +828,6 @@ async def handle_resume_booking(
     await transition_to_state(update, context, "await_prepayment", edit_message=True)
 
 
-# НОВЫЙ МЕТОД: Обработка согласия продолжить после одобрения предоплаты (Вариант Б)
 async def handle_resume_after_pay(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -775,10 +835,10 @@ async def handle_resume_after_pay(
     if query is None:
         return
     await query.answer()
-    
+
     context.user_data["booking_state"] = "await_date"
     context.user_data.setdefault("history", []).append("await_prepayment")
-    
+
     await transition_to_state(update, context, "await_date", edit_message=True)
 
 
@@ -806,7 +866,7 @@ async def get_free_slots_for_date(
         slot_duration = timedelta(hours=1)
 
     free_slots = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for hw in working_hours:
         hour, minute = map(int, hw.split(":"))
@@ -1026,32 +1086,17 @@ async def handle_main_menu_callback(
             user = await session.scalar(
                 select(User).where(User.telegram_id == query.from_user.id)
             )
-            setting = await session.get(StudioSetting, "healing_instructions")
 
         if user and user.has_healing_access:
-            if setting and setting.value:
-                healing_text = setting.value
-                parse_mode = None
-            else:
-                healing_text = (
-                    "✨ **Инструкция по заживлению пирсинга** ✨\n\n"
-                    "1. Не трогайте прокол руками.\n"
-                    "2. Обрабатывайте физраствором 2-3 раза в день.\n"
-                    "3. Избегайте саун, бассейнов и открытых водоемов первые 2-4 недели.\n"
-                    "4. Не проворачивайте украшение."
-                )
-                parse_mode = "Markdown"
-
             await query.edit_message_text(
-                healing_text,
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Назад", callback_data="back:main")]]
-                ),
-                parse_mode=parse_mode,
+                "✨ <b>Инструкции по заживлению</b> ✨\n\nВыберите интересующую вас зону прокола:",
+                reply_markup=build_client_healing_zones_keyboard(),
+                parse_mode="HTML",
             )
         else:
-            # ИСПРАВЛЕНО: Кастомизация сообщения об отказе доступа к инструкции
-            healing_denied_text = await get_custom_text("custom_txt:healing_denied", DEFAULT_CUSTOM_TEXTS["healing_denied"])
+            healing_denied_text = await get_custom_text(
+                "custom_txt:healing_denied", DEFAULT_CUSTOM_TEXTS["healing_denied"]
+            )
             await query.edit_message_text(
                 healing_denied_text,
                 reply_markup=InlineKeyboardMarkup(
@@ -1218,7 +1263,9 @@ async def handle_booking_input(
         await register_user(update, context)
 
         client_reply_markup = ReplyKeyboardMarkup(
-            [[KeyboardButton("Старт"), KeyboardButton("В начало")]], resize_keyboard=True, is_persistent=True
+            [[KeyboardButton("Старт"), KeyboardButton("В начало")]],
+            resize_keyboard=True,
+            is_persistent=True,
         )
         await update.effective_message.reply_text(
             "Добро пожаловать в студию пирсинга.\nВыберите действие ниже.",
@@ -1260,7 +1307,6 @@ async def handle_booking_input(
             if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
                 next_state = "medical_question_1"
             else:
-                # ИСПРАВЛЕНО: Перенаправление на предоплату вместо прямой даты
                 next_state = "await_prepayment"
 
         await transition_to_state(update, context, next_state)
@@ -1287,7 +1333,6 @@ async def handle_booking_input(
         if context.user_data.get("selected_service") in SERVICES_WITH_MEDICAL:
             next_state = "medical_question_1"
         else:
-            # ИСПРАВЛЕНО: Перенаправление на предоплату вместо прямой даты
             next_state = "await_prepayment"
 
         await transition_to_state(update, context, next_state)
@@ -1306,7 +1351,7 @@ async def handle_booking_input(
                     reply_markup=build_back_button(),
                 )
                 return
-            
+
             start_date, end_date = get_allowed_booking_range()
             if not (start_date <= input_date.date() <= end_date):
                 start_str = start_date.strftime("%d.%m.%Y")
@@ -1315,7 +1360,7 @@ async def handle_booking_input(
                     f"Извините, сейчас запись доступна только на период с <b>{start_str}</b> по <b>{end_str}</b>.\n"
                     f"Пожалуйста, введите другую дату из этого диапазона (ДД.ММ.ГГГГ):",
                     reply_markup=build_back_button(),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
                 )
                 return
         except ValueError:
@@ -1385,7 +1430,7 @@ async def handle_booking_callback(
             end_str = end_date.strftime("%d.%m.%Y")
             await query.answer(
                 f"Запись на эту дату недоступна. Допустимый диапазон: с {start_str} по {end_str}.",
-                show_alert=True
+                show_alert=True,
             )
             return
 
@@ -1512,10 +1557,9 @@ async def handle_booking_callback(
                 direct_messages_topic_id=direct_messages_topic_id,
             )
             session.add(booking)
-            
-            # ИСПРАВЛЕНО: Сброс статуса предоплаты в базе после завершения бронирования сеанса
+
             user.is_prepaid = False
-            
+
             await session.commit()
             await session.refresh(booking)
 
@@ -1575,16 +1619,13 @@ async def handle_booking_callback(
         latitude = settings_map.get("latitude")
         longitude = settings_map.get("longitude")
 
-        # ИСПРАВЛЕНО: Кастомизация подтверждения записи через MediaTemplate
         booking_confirmed_tpl = await get_custom_text(
-            "custom_txt:booking_confirmed",
-            DEFAULT_CUSTOM_TEXTS["booking_confirmed"]
+            "custom_txt:booking_confirmed", DEFAULT_CUSTOM_TEXTS["booking_confirmed"]
         )
         booking_message = booking_confirmed_tpl.format(
-            slot_display=slot_display,
-            address_text=address_text
+            slot_display=slot_display, address_text=address_text
         )
-        
+
         if latitude and longitude:
             booking_message += f"\nКоординаты: {latitude}, {longitude}"
 
@@ -1612,6 +1653,106 @@ async def handle_booking_callback(
         return
 
 
+async def handle_client_healing_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Обработчик выбора инструкций по заживлению для пользователей."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    async with AsyncSessionFactory() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == query.from_user.id)
+        )
+
+    if not user or not user.has_healing_access:
+        healing_denied_text = await get_custom_text(
+            "custom_txt:healing_denied", DEFAULT_CUSTOM_TEXTS["healing_denied"]
+        )
+        await query.answer("Доступ ограничен.", show_alert=True)
+        await query.edit_message_text(
+            healing_denied_text,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Назад", callback_data="back:main")]]
+            ),
+        )
+        return
+
+    data = query.data or ""
+    parts = data.split(":")
+    action = parts[1]
+
+    if action == "zones":
+        await query.edit_message_text(
+            "✨ <b>Инструкции по заживлению</b> ✨\n\nВыберите интересующую вас зону прокола:",
+            reply_markup=build_client_healing_zones_keyboard(),
+            parse_mode="HTML",
+        )
+    elif action == "select_zone":
+        zone_key = parts[2]
+        zone_name = PIERCING_ZONES.get(zone_key, {}).get("name", zone_key)
+        await query.edit_message_text(
+            f"Проколы в зоне <b>{zone_name}</b>:\n\nВыберите прокол для получения детальной инструкции:",
+            reply_markup=build_client_healing_types_keyboard(zone_key),
+            parse_mode="HTML",
+        )
+    elif action == "select_type":
+        zone_key = parts[2]
+        type_idx_str = parts[3]
+
+        zone_info = PIERCING_ZONES.get(zone_key)
+        if not zone_info or not type_idx_str.isdigit():
+            await query.answer("Произошла ошибка: неверные данные.", show_alert=True)
+            return
+
+        type_idx = int(type_idx_str)
+        if type_idx < 0 or type_idx >= len(zone_info["types"]):
+            await query.answer(
+                "Произошла ошибка: неверный тип прокола.", show_alert=True
+            )
+            return
+
+        type_name = zone_info["types"][type_idx]
+
+        async with AsyncSessionFactory() as session:
+            template = await session.scalar(
+                select(MediaTemplate).where(
+                    MediaTemplate.key == f"healing_txt:{zone_key}:{type_name}"
+                )
+            )
+
+            if template and template.value:
+                healing_text = template.value
+            else:
+                setting = await session.get(StudioSetting, "healing_instructions")
+                if setting and setting.value:
+                    healing_text = setting.value
+                else:
+                    healing_text = (
+                        "Инструкция по заживлению пирсинга:\n\n"
+                        "1. Не трогайте прокол руками.\n"
+                        "2. Обрабатывайте физраствором 2-3 раза в день.\n"
+                        "3. Избегайте саун, бассейнов и открытых водоемов первые 2-4 недели.\n"
+                        "4. Не проворачивайте украшение."
+                    )
+
+        await query.edit_message_text(
+            text=healing_text,
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "⬅️ Назад",
+                            callback_data=f"client_healing:select_zone:{zone_key}",
+                        )
+                    ]
+                ]
+            ),
+            parse_mode=None,
+        )
+
+
 client_handlers = [
     CallbackQueryHandler(
         handle_main_menu_callback, pattern=r"^(book|support|healing|back:main)$"
@@ -1620,8 +1761,8 @@ client_handlers = [
     CallbackQueryHandler(handle_zone_selection_callback, pattern=r"^p_zone:"),
     CallbackQueryHandler(handle_type_selection_callback, pattern=r"^p_type:"),
     CallbackQueryHandler(handle_resume_booking, pattern=r"^resume_booking$"),
-    # ИСПРАВЛЕНО: Регистрация нового callback'а для продолжения записи после предоплаты
     CallbackQueryHandler(handle_resume_after_pay, pattern=r"^resume_after_pay$"),
+    CallbackQueryHandler(handle_client_healing_callback, pattern=r"^client_healing:"),
     CallbackQueryHandler(
         handle_booking_callback,
         pattern=r"^(back:service|slot:|medical:|change_date|check_date:|book_slot:|booking_back)",

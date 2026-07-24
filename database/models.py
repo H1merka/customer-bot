@@ -1,3 +1,4 @@
+# database/models.py
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -46,7 +47,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(default=UserRole.USER)
     has_healing_access: Mapped[bool] = mapped_column(Boolean, default=False)
     # Новое поле для фиксации предоплаты за текущий сеанс
-    is_prepaid: Mapped[bool] = mapped_column(Boolean, default=False)  
+    is_prepaid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     bookings: Mapped[list[Booking]] = relationship(back_populates="user")
@@ -128,3 +129,17 @@ class DayOff(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     date: Mapped[date] = mapped_column(Date, unique=True, index=True)
     google_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class Broadcast(Base):
+    """Модель планирования и сохранения рассылок пользователям (Persistence)."""
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime, index=True, nullable=False
+    )  # UTC datetime
+    sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
