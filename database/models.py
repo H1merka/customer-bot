@@ -46,7 +46,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(default=UserRole.USER)
     has_healing_access: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_prepaid: Mapped[bool] = mapped_column(Boolean, default=False)  
+    is_prepaid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     bookings: Mapped[list[Booking]] = relationship(back_populates="user")
@@ -131,13 +131,26 @@ class DayOff(Base):
 
 class Certificate(Base):
     """Модель хранения подарочных сертификатов студии."""
+
     __tablename__ = "certificates"
 
-    code: Mapped[str] = mapped_column(String(5), primary_key=True)  # Уникальный 5-значный код
-    target_service: Mapped[str] = mapped_column(String(255), nullable=False)  # Целевая услуга
-    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # Сумма полной стоимости
-    is_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Статус использования
-    purchased_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.telegram_id"))  # Кто купил
-    used_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.telegram_id"), nullable=True)  # Кто активировал
+    code: Mapped[str] = mapped_column(
+        String(5), primary_key=True
+    )  # Уникальный 5-значный код
+    target_service: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )  # Целевая услуга (теперь опциональна)
+    amount: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # Сумма полной стоимости
+    is_used: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )  # Статус использования
+    purchased_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.telegram_id")
+    )  # Кто купил
+    used_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.telegram_id"), nullable=True
+    )  # Кто активировал
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

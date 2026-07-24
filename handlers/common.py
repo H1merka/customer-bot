@@ -1,19 +1,19 @@
 # handlers/common.py
 from __future__ import annotations
 
+from sqlalchemy import select
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update,
-    ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
 )
-from telegram.ext import ContextTypes, ApplicationHandlerStop
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
+from config.constants import clear_booking_session
 from database.connection import AsyncSessionFactory
 from database.models import User
-from sqlalchemy import select
-from config.constants import clear_booking_session
 
 
 async def register_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -44,8 +44,16 @@ def build_main_menu() -> InlineKeyboardMarkup:
     """Генерирует главное меню, содержащее кнопку приобретения и активации сертификата."""
     keyboard = [
         [InlineKeyboardButton("Записаться", callback_data="book")],
-        [InlineKeyboardButton("Приобрести сертификат", callback_data="service:buy_certificate")],
-        [InlineKeyboardButton("Активировать сертификат", callback_data="activate_cert")],
+        [
+            InlineKeyboardButton(
+                "Приобрести сертификат", callback_data="service:buy_certificate"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Активировать сертификат", callback_data="activate_cert"
+            )
+        ],
         [
             InlineKeyboardButton(
                 "Связаться со штатным пирсером", callback_data="support"
@@ -79,12 +87,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ticket.assigned_admin_id = None
             await session.commit()
 
-    from handlers.admin import check_if_admin, build_admin_main_menu
+    from handlers.admin import build_admin_main_menu, check_if_admin
 
     is_admin = await check_if_admin(user_id, context)
 
-    from handlers.client import get_custom_text, DEFAULT_CUSTOM_TEXTS
-    welcome_text = await get_custom_text("custom_txt:welcome", DEFAULT_CUSTOM_TEXTS["welcome"])
+    from handlers.client import DEFAULT_CUSTOM_TEXTS, get_custom_text
+
+    welcome_text = await get_custom_text(
+        "custom_txt:welcome", DEFAULT_CUSTOM_TEXTS["welcome"]
+    )
 
     if is_admin:
         admin_reply_markup = ReplyKeyboardMarkup(
@@ -107,7 +118,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         client_reply_markup = ReplyKeyboardMarkup(
-            [[KeyboardButton("Старт"), KeyboardButton("В начало")]], resize_keyboard=True, is_persistent=True
+            [[KeyboardButton("Старт"), KeyboardButton("В начало")]],
+            resize_keyboard=True,
+            is_persistent=True,
         )
         await update.effective_message.reply_text(
             "Клавиатура обновлена.", reply_markup=client_reply_markup
