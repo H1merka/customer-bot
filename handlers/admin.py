@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
@@ -16,28 +16,27 @@ from telegram.ext import (
     filters,
 )
 
-# Прямой импорт из constants
 from config.constants import (
-    CUSTOM_TEXT_LABELS,
-    DEFAULT_CUSTOM_TEXTS,
     DEFAULT_STAGE_TEXTS,
     PIERCING_ZONES,
     STAGE_LABELS,
+    CUSTOM_TEXT_LABELS,
+    DEFAULT_CUSTOM_TEXTS,
 )
 from config.settings import get_settings
 from database.connection import AsyncSessionFactory
 from database.models import (
     Booking,
     BookingStatus,
-    Broadcast,
     DayOff,
     MediaTemplate,
     StudioSetting,
     User,
     UserRole,
+    Broadcast,
 )
-from scheduler.jobs import run_broadcast_job
 from services.google_calendar import GoogleCalendarService
+from scheduler.jobs import run_broadcast_job
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -154,10 +153,7 @@ def build_zones_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(keyboard)
 
 
-def build_healing_zones_keyboard(
-    prefix: str, back_callback: str
-) -> InlineKeyboardMarkup:
-    """Клавиатура выбора зон для управления инструкциями заживления."""
+def build_healing_zones_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     keyboard = []
     for zone_key, zone_info in PIERCING_ZONES.items():
         keyboard.append(
@@ -171,16 +167,11 @@ def build_healing_zones_keyboard(
     return InlineKeyboardMarkup(keyboard)
 
 
-def build_healing_types_keyboard(
-    zone_key: str, prefix: str, back_callback: str
-) -> InlineKeyboardMarkup:
-    """Клавиатура выбора проколов выбранной зоны, передавая индекс во избежание Button_data_invalid."""
+def build_healing_types_keyboard(zone_key: str, prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     zone_info = PIERCING_ZONES.get(zone_key)
     if not zone_info:
-        return InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)]]
-        )
-
+        return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)]])
+    
     keyboard = []
     for idx, type_name in enumerate(zone_info["types"]):
         keyboard.append(
@@ -309,9 +300,7 @@ async def handle_admin_setting_callback(
     elif setting_action == "update_healing":
         await query.edit_message_text(
             "Управление инструкциями по заживлению.\n\nВыберите интересующую зону проколов:",
-            reply_markup=build_healing_zones_keyboard(
-                "admin_healing:select_zone", "admin_menu:settings"
-            ),
+            reply_markup=build_healing_zones_keyboard("admin_healing:select_zone", "admin_menu:settings")
         )
     elif setting_action == "add_admin":
         context.user_data["admin_state"] = "await_userid_add_admin"
@@ -393,21 +382,9 @@ async def handle_admin_ui_callback(
         )
     elif action == "texts":
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    "Этапы сценария записи", callback_data="admin_ui_txt_cat:stages"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Служебные сообщения бота", callback_data="admin_ui_txt_cat:service"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Медицинские вопросы", callback_data="admin_ui_txt_cat:medical"
-                )
-            ],
+            [InlineKeyboardButton("Этапы сценария записи", callback_data="admin_ui_txt_cat:stages")],
+            [InlineKeyboardButton("Служебные сообщения бота", callback_data="admin_ui_txt_cat:service")],
+            [InlineKeyboardButton("Медицинские вопросы", callback_data="admin_ui_txt_cat:medical")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
         ]
         await query.edit_message_text(
@@ -466,86 +443,27 @@ async def handle_admin_ui_txt_cat_callback(
         )
     elif category == "service":
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    "Приветственное сообщение",
-                    callback_data="admin_ui_txt:select_custom:welcome",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Отказ в инструкции заживления",
-                    callback_data="admin_ui_txt:select_custom:healing_denied",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вызов пирсера (из меню)",
-                    callback_data="admin_ui_txt:select_custom:support_summon",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вызов специалиста (мед. анкета)",
-                    callback_data="admin_ui_txt:select_custom:specialist_review",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Подтверждение записи",
-                    callback_data="admin_ui_txt:select_custom:booking_confirmed",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Инструкция по предоплате",
-                    callback_data="admin_ui_txt:select_custom:prepayment_info",
-                )
-            ],
+            [InlineKeyboardButton("Приветственное сообщение", callback_data="admin_ui_txt:select_custom:welcome")],
+            [InlineKeyboardButton("Отказ в инструкции заживления", callback_data="admin_ui_txt:select_custom:healing_denied")],
+            [InlineKeyboardButton("Вызов пирсера (из меню)", callback_data="admin_ui_txt:select_custom:support_summon")],
+            [InlineKeyboardButton("Вызов специалиста (мед. анкета)", callback_data="admin_ui_txt:select_custom:specialist_review")],
+            [InlineKeyboardButton("Подтверждение записи", callback_data="admin_ui_txt:select_custom:booking_confirmed")],
+            [InlineKeyboardButton("Инструкция по предоплате", callback_data="admin_ui_txt:select_custom:prepayment_info")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
         ]
         await query.edit_message_text(
-            "Управление служебными сообщениями:\n\nВыберите сообщение для настройки:",
+            "Управление служебными сообщениями:\n\n"
+            "Выберите сообщение для настройки:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
     elif category == "medical":
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    "Вопрос 1: Заболевания крови",
-                    callback_data="admin_ui_txt:select_custom:medical_q1",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вопрос 2: Свертываемость",
-                    callback_data="admin_ui_txt:select_custom:medical_q2",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вопрос 3: Принимаемые лекарства",
-                    callback_data="admin_ui_txt:select_custom:medical_q3",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вопрос 4: Хронические заболевания",
-                    callback_data="admin_ui_txt:select_custom:medical_q4",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вопрос 5: Заживление ран",
-                    callback_data="admin_ui_txt:select_custom:medical_q5",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Вопрос 6: Кожные заболевания",
-                    callback_data="admin_ui_txt:select_custom:medical_q6",
-                )
-            ],
+            [InlineKeyboardButton("Вопрос 1: Заболевания крови", callback_data="admin_ui_txt:select_custom:medical_q1")],
+            [InlineKeyboardButton("Вопрос 2: Свертываемость", callback_data="admin_ui_txt:select_custom:medical_q2")],
+            [InlineKeyboardButton("Вопрос 3: Принимаемые лекарства", callback_data="admin_ui_txt:select_custom:medical_q3")],
+            [InlineKeyboardButton("Вопрос 4: Хронические заболевания", callback_data="admin_ui_txt:select_custom:medical_q4")],
+            [InlineKeyboardButton("Вопрос 5: Заживление ран", callback_data="admin_ui_txt:select_custom:medical_q5")],
+            [InlineKeyboardButton("Вопрос 6: Кожные заболевания", callback_data="admin_ui_txt:select_custom:medical_q6")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="admin_setting:ui_config")],
         ]
         await query.edit_message_text(
@@ -692,13 +610,7 @@ async def handle_admin_ui_txt_callback(
             f"{placeholder_info}\n\n"
             f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
             reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "Отмена", callback_data="admin_setting:ui_config"
-                        )
-                    ]
-                ]
+                [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
             ),
             parse_mode="HTML",
         )
@@ -715,7 +627,9 @@ async def handle_admin_ui_txt_callback(
                 )
             )
             current_text = (
-                template.value if template and template.value else default_text
+                template.value
+                if template and template.value
+                else default_text
             )
 
         placeholder_info = ""
@@ -726,9 +640,7 @@ async def handle_admin_ui_txt_callback(
                 "- <code>{{address_text}}</code> (адрес студии)"
             )
         else:
-            placeholder_info = (
-                "Для этого сообщения динамические плейсхолдеры отсутствуют."
-            )
+            placeholder_info = "Для этого сообщения динамические плейсхолдеры отсутствуют."
 
         context.user_data["admin_state"] = "await_ui_text_update"
         context.user_data["edit_text_key"] = f"custom_txt:{custom_key}"
@@ -740,13 +652,7 @@ async def handle_admin_ui_txt_callback(
             f"{placeholder_info}\n\n"
             f"Пожалуйста, отправьте новый текст сообщения в ответ на этот запрос:",
             reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "Отмена", callback_data="admin_setting:ui_config"
-                        )
-                    ]
-                ]
+                [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
             ),
             parse_mode="HTML",
         )
@@ -755,7 +661,7 @@ async def handle_admin_ui_txt_callback(
 async def handle_admin_prepayment_approval(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Одобрение предоплаты администратором с авторедактированием клиентского интерфейса (Вариант А)."""
+    """Одобрение предоплаты администратором с генерацией подарочных сертификатов или подтверждением сеанса."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
@@ -766,6 +672,97 @@ async def handle_admin_prepayment_approval(
 
     data = query.data or ""
     client_id = int(data.split(":", 1)[1])
+    
+    client_user_data = context.application.user_data.get(client_id) if context.application else None
+    is_buying_cert = False
+    target_service = ""
+    cert_amount = 0
+    
+    if client_user_data:
+        selected_service = client_user_data.get("selected_service")
+        from config.constants import SERVICE_OPTIONS
+        if selected_service == SERVICE_OPTIONS.get("buy_certificate"):
+            is_buying_cert = True
+            target_service = client_user_data.get("cert_target_service", "Не указана")
+            cert_amount = client_user_data.get("cert_amount", 0)
+
+    admin_username = f"@{update.effective_user.username}" if update.effective_user.username else update.effective_user.full_name
+
+    if is_buying_cert:
+        import random
+        from database.models import Certificate
+        
+        async with AsyncSessionFactory() as session:
+            # Генерация уникального 5-значного цифрового кода сертификата
+            while True:
+                code = "".join(random.choices("0123456789", k=5))
+                exists = await session.get(Certificate, code)
+                if not exists:
+                    break
+                    
+            new_cert = Certificate(
+                code=code,
+                target_service=target_service,
+                amount=cert_amount,
+                is_used=False,
+                purchased_by_user_id=client_id
+            )
+            session.add(new_cert)
+            await session.commit()
+        
+        await query.answer("Сертификат успешно оплачен и сгенерирован!")
+        
+        original_text = query.message.text if query.message else "Запрос на покупку сертификата"
+        await query.edit_message_text(
+            text=f"✅ {original_text}\n\n<b>[ОДОБРЕНО]</b> Администратор {admin_username} подтвердил оплату сертификата. Код сертификата: <code>{code}</code>",
+            reply_markup=None,
+            parse_mode="HTML"
+        )
+        
+        from handlers.client import get_custom_text, DEFAULT_CUSTOM_TEXTS
+        success_tpl = await get_custom_text("custom_txt:cert_success", DEFAULT_CUSTOM_TEXTS["cert_success"])
+        client_text = success_tpl.format(
+            code=code,
+            target_service=target_service,
+            amount=cert_amount
+        )
+        
+        from handlers.common import build_main_menu
+        client_keyboard = build_main_menu()
+        
+        edited_successfully = False
+        if client_user_data:
+            prepay_msg_id = client_user_data.get("prepayment_message_id")
+            prepay_chat_id = client_user_data.get("prepayment_chat_id")
+            if prepay_msg_id and prepay_chat_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=prepay_chat_id,
+                        message_id=prepay_msg_id,
+                        text=client_text,
+                        reply_markup=client_keyboard,
+                        parse_mode="HTML"
+                    )
+                    edited_successfully = True
+                    from config.constants import clear_booking_session
+                    clear_booking_session(client_user_data)
+                except Exception as exc:
+                    logger.warning("Failed to edit prepayment message for cert buyer %s: %s", client_id, exc)
+                    
+        if not edited_successfully:
+            try:
+                await context.bot.send_message(
+                    chat_id=client_id,
+                    text=client_text,
+                    reply_markup=client_keyboard,
+                    parse_mode="HTML"
+                )
+                if client_user_data:
+                    from config.constants import clear_booking_session
+                    clear_booking_session(client_user_data)
+            except Exception as exc:
+                logger.error("Failed to send fallback message to cert buyer %s: %s", client_id, exc)
+        return
 
     async with AsyncSessionFactory() as session:
         user = await session.scalar(select(User).where(User.telegram_id == client_id))
@@ -776,42 +773,27 @@ async def handle_admin_prepayment_approval(
             await query.answer("Пользователь не найден в базе данных.", show_alert=True)
             return
 
-    admin_username = (
-        f"@{update.effective_user.username}"
-        if update.effective_user.username
-        else update.effective_user.full_name
-    )
     await query.answer("Предоплата подтверждена!")
-
+    
     original_text = query.message.text if query.message else "Запрос на предоплату"
     await query.edit_message_text(
         text=f"✅ {original_text}\n\n<b>[ОДОБРЕНО]</b> Администратор {admin_username} подтвердил получение предоплаты.",
         reply_markup=None,
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
-
-    # Динамический импорт во избежание круговых импортов на старте системы
-    from handlers.client import (
-        build_back_button,
-        get_allowed_booking_range,
-        get_stage_text,
-    )
-
+    
+    from handlers.client import get_stage_text, get_allowed_booking_range, build_back_button
+    
     start_date, end_date = get_allowed_booking_range()
     start_str = start_date.strftime("%d.%m.%Y")
     end_str = end_date.strftime("%d.%m.%Y")
-
-    await_date_text = await get_stage_text(
-        "await_date", start_date=start_str, end_date=end_str
-    )
+    
+    await_date_text = await get_stage_text("await_date", start_date=start_str, end_date=end_str)
     client_text = f"✅ <b>Предоплата подтверждена!</b>\n\n{await_date_text}"
     client_keyboard = build_back_button()
-
-    client_user_data = (
-        context.application.user_data.get(client_id) if context.application else None
-    )
+    
     edited_successfully = False
-
+    
     if client_user_data:
         prepay_msg_id = client_user_data.get("prepayment_message_id")
         prepay_chat_id = client_user_data.get("prepayment_chat_id")
@@ -822,27 +804,23 @@ async def handle_admin_prepayment_approval(
                     message_id=prepay_msg_id,
                     text=client_text,
                     reply_markup=client_keyboard,
-                    parse_mode="HTML",
+                    parse_mode="HTML"
                 )
                 edited_successfully = True
-
+                
                 client_user_data["booking_state"] = "await_date"
                 client_user_data.setdefault("history", []).append("await_prepayment")
-                logger.info(
-                    "Successfully automatically edited client %s's screen to await_date",
-                    client_id,
-                )
+                logger.info("Successfully automatically edited client %s's screen to await_date", client_id)
             except Exception as exc:
                 logger.warning(
                     "Failed to edit prepayment message for user %s, falling back to new message: %s",
-                    client_id,
-                    exc,
+                    client_id, exc
                 )
-
+                
     if not edited_successfully:
         chat_id = client_id
         topic_id = None
-
+        
         async with AsyncSessionFactory() as session:
             latest_booking = await session.scalar(
                 select(Booking)
@@ -858,11 +836,11 @@ async def handle_admin_prepayment_approval(
             "chat_id": chat_id,
             "text": client_text,
             "reply_markup": client_keyboard,
-            "parse_mode": "HTML",
+            "parse_mode": "HTML"
         }
         if topic_id:
             send_kwargs["direct_messages_topic_id"] = topic_id
-
+            
         try:
             await context.bot.send_message(**send_kwargs)
             if client_user_data:
@@ -870,15 +848,12 @@ async def handle_admin_prepayment_approval(
                 client_user_data.setdefault("history", []).append("await_prepayment")
             logger.info("Sent fallback prepayment message to client %s", client_id)
         except Exception as exc:
-            logger.error(
-                "Failed to notify user %s about prepayment approval: %s", client_id, exc
-            )
+            logger.error("Failed to notify user %s about prepayment approval: %s", client_id, exc)
 
 
 async def handle_admin_healing_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Управление иерархическими инструкциями заживления с использованием безопасного разбора индексов."""
     query = update.callback_query
     if query is None or update.effective_user is None:
         return
@@ -894,24 +869,20 @@ async def handle_admin_healing_callback(
     if action == "zones":
         await query.edit_message_text(
             "Управление инструкциями по заживлению.\n\nВыберите интересующую зону проколов:",
-            reply_markup=build_healing_zones_keyboard(
-                "admin_healing:select_zone", "admin_menu:settings"
-            ),
+            reply_markup=build_healing_zones_keyboard("admin_healing:select_zone", "admin_menu:settings")
         )
     elif action == "select_zone":
         zone_key = parts[2]
         zone_name = PIERCING_ZONES.get(zone_key, {}).get("name", zone_key)
         await query.edit_message_text(
             f"Зона: <b>{zone_name}</b>\n\nВыберите тип прокола, для которого хотите настроить или изменить инструкцию:",
-            reply_markup=build_healing_types_keyboard(
-                zone_key, "admin_healing:select_type", "admin_healing:zones"
-            ),
-            parse_mode="HTML",
+            reply_markup=build_healing_types_keyboard(zone_key, "admin_healing:select_type", "admin_healing:zones"),
+            parse_mode="HTML"
         )
     elif action == "select_type":
         zone_key = parts[2]
         type_idx_str = parts[3]
-
+        
         zone_info = PIERCING_ZONES.get(zone_key)
         if not zone_info or not type_idx_str.isdigit():
             await query.answer("Произошла ошибка: неверные данные.", show_alert=True)
@@ -919,9 +890,7 @@ async def handle_admin_healing_callback(
 
         type_idx = int(type_idx_str)
         if type_idx < 0 or type_idx >= len(zone_info["types"]):
-            await query.answer(
-                "Произошла ошибка: неверный индекс типа.", show_alert=True
-            )
+            await query.answer("Произошла ошибка: неверный индекс типа.", show_alert=True)
             return
 
         type_name = zone_info["types"][type_idx]
@@ -929,13 +898,11 @@ async def handle_admin_healing_callback(
 
         async with AsyncSessionFactory() as session:
             template = await session.scalar(
-                select(MediaTemplate).where(
-                    MediaTemplate.key == f"healing_txt:{zone_key}:{type_name}"
-                )
+                select(MediaTemplate).where(MediaTemplate.key == f"healing_txt:{zone_key}:{type_name}")
             )
             current_text = (
-                template.value
-                if template and template.value
+                template.value 
+                if template and template.value 
                 else "Текстовая инструкция еще не задана (пользователи будут видеть базовый дефолтный текст)."
             )
 
@@ -948,17 +915,10 @@ async def handle_admin_healing_callback(
             f"📝 <b>Текущий текст инструкции:</b>\n"
             f"<blockquote>{html.escape(current_text)}</blockquote>\n\n"
             f"Пожалуйста, введите и отправьте новый текст инструкции (обычный текст без форматирования):",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ Назад",
-                            callback_data=f"admin_healing:select_zone:{zone_key}",
-                        )
-                    ]
-                ]
-            ),
-            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_healing:select_zone:{zone_key}")]
+            ]),
+            parse_mode="HTML"
         )
 
 
@@ -1039,13 +999,12 @@ async def handle_admin_input(
             "Текст рассылки сохранен.\n\n"
             "Теперь укажите дату и время отправки в формате <b>ДД.ММ.ГГГГ ХХ:ХХ</b> (например, <code>25.07.2026 15:30</code>):",
             reply_markup=build_admin_cancel_button(),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         raise ApplicationHandlerStop()
 
     if admin_state == "await_broadcast_time":
         try:
-            # Парсинг вводимых данных в часовом поясе Екатеринбурга (UTC+5)
             parsed_dt = datetime.strptime(text, "%d.%m.%Y %H:%M")
             local_tz = timezone(timedelta(hours=5))
             aware_dt = parsed_dt.replace(tzinfo=local_tz)
@@ -1068,34 +1027,33 @@ async def handle_admin_input(
         broadcast_text = context.user_data.pop("temp_broadcast_text", None)
         if not broadcast_text:
             await update.effective_message.reply_text(
-                "Произошла непредвиденная ошибка: текст рассылки не найден. Пожалуйста, попробуйте создать рассылку заново.",
+                "Произошла непредвиденная ошибка: text рассылки не найден. Пожалуйста, попробуйте создать рассылку заново.",
                 reply_markup=build_admin_settings_menu(),
             )
             context.user_data.pop("admin_state", None)
             raise ApplicationHandlerStop()
 
-        # Приводим к наивному UTC времени для хранения в БД
-        utc_dt = aware_dt.astimezone(UTC).replace(tzinfo=None)
+        utc_dt = aware_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
         async with AsyncSessionFactory() as session:
             broadcast = Broadcast(
                 text=broadcast_text,
                 scheduled_at=utc_dt,
                 sent=False,
-                admin_id=update.effective_user.id,
+                admin_id=update.effective_user.id
             )
             session.add(broadcast)
             await session.commit()
             await session.refresh(broadcast)
 
-        # Планирование асинхронной задачи в Telegram JobQueue
+        # Стабильное планирование асинхронной задачи с использованием timezone-aware datetime
         if context.job_queue:
-            delay_seconds = (aware_dt - now_local).total_seconds()
             context.job_queue.run_once(
                 run_broadcast_job,
-                when=delay_seconds,
+                when=aware_dt,  # Напрямую передаем timezone-aware объект в JobQueue
                 data={"broadcast_id": broadcast.id},
                 name=f"broadcast_job_{broadcast.id}",
+                job_kwargs={"misfire_grace_time": None}  # Защита от пропусков APScheduler
             )
             await update.effective_message.reply_text(
                 f"Рассылка успешно запланирована!\n\n"
@@ -1169,10 +1127,7 @@ async def handle_admin_input(
         elif full_key == "stage_txt:await_date":
             test_kwargs = {"start_date": "01.07.2026", "end_date": "15.08.2026"}
         elif full_key == "custom_txt:booking_confirmed":
-            test_kwargs = {
-                "slot_display": "25.07.2026 в 15:30",
-                "address_text": "Тест-адрес",
-            }
+            test_kwargs = {"slot_display": "25.07.2026 в 15:30", "address_text": "Тест-адрес"}
 
         try:
             text.format(**test_kwargs)
@@ -1184,13 +1139,7 @@ async def handle_admin_input(
                 f"Ошибка: <code>{html.escape(str(exc))}</code>.\n\n"
                 f"Пожалуйста, исправьте текст и пришлите его заново:",
                 reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "Отмена", callback_data="admin_setting:ui_config"
-                            )
-                        ]
-                    ]
+                    [[InlineKeyboardButton("Отмена", callback_data="admin_setting:ui_config")]]
                 ),
                 parse_mode="HTML",
             )
@@ -1198,7 +1147,9 @@ async def handle_admin_input(
 
         async with AsyncSessionFactory() as session:
             template = await session.scalar(
-                select(MediaTemplate).where(MediaTemplate.key == full_key)
+                select(MediaTemplate).where(
+                    MediaTemplate.key == full_key
+                )
             )
             if template:
                 template.value = text
@@ -1207,12 +1158,12 @@ async def handle_admin_input(
             await session.commit()
 
         context.user_data.pop("admin_state", None)
-
+        
         if prefix == "stage_txt":
             label = STAGE_LABELS.get(actual_key, actual_key)
         else:
             label = CUSTOM_TEXT_LABELS.get(actual_key, actual_key)
-
+            
         await update.effective_message.reply_text(
             f"Текст для <b>{label}</b> успешно сохранен в базе данных.\n\n"
             f"Возврат в меню настроек.",
@@ -1575,9 +1526,7 @@ admin_handlers = [
         handle_dayoff_confirm_callback, pattern=r"^admin_dayoff_confirm:"
     ),
     CallbackQueryHandler(handle_admin_ui_callback, pattern=r"^admin_ui:"),
-    CallbackQueryHandler(
-        handle_admin_ui_txt_cat_callback, pattern=r"^admin_ui_txt_cat:"
-    ),
+    CallbackQueryHandler(handle_admin_ui_txt_cat_callback, pattern=r"^admin_ui_txt_cat:"),
     CallbackQueryHandler(handle_admin_prepayment_approval, pattern=r"^approve_pay:"),
     CallbackQueryHandler(handle_admin_healing_callback, pattern=r"^admin_healing:"),
     CallbackQueryHandler(handle_admin_ui_img_callback, pattern=r"^admin_ui_img:"),

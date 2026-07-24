@@ -1,8 +1,8 @@
-# jobs.py
+# scheduler/jobs.py
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from telegram.ext import Application, ContextTypes
@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def send_24h_reminders(app: Application) -> None:
+async def send_24h_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Фоновая задача рассылки напоминаний за 24 часа."""
     async with AsyncSessionFactory() as session:
         local_tz = timezone(timedelta(hours=5))
         now_local = datetime.now(local_tz).replace(tzinfo=None)
 
-        # Поиск записей в временном окне: 24 часа назад с дельтой ±10 минут
         window_start = now_local + timedelta(hours=23, minutes=50)
         window_end = now_local + timedelta(hours=24, minutes=10)
 
@@ -34,9 +34,8 @@ async def send_24h_reminders(app: Application) -> None:
 
         for booking in bookings:
             try:
-                # Если у записи сохранены чат и топик из Сообщений канала, отправляем строго в них
                 if booking.chat_id and booking.direct_messages_topic_id:
-                    await app.bot.send_message(
+                    await context.bot.send_message(
                         chat_id=booking.chat_id,
                         direct_messages_topic_id=booking.direct_messages_topic_id,
                         text=(
@@ -49,8 +48,7 @@ async def send_24h_reminders(app: Application) -> None:
                         booking.id,
                     )
                 else:
-                    # Резервный вариант: пробуем отправить в личные сообщения пользователю напрямую
-                    await app.bot.send_message(
+                    await context.bot.send_message(
                         chat_id=booking.user_id,
                         text=(
                             f"Напоминание: ваша запись на {booking.date_time.strftime('%d.%m.%Y %H:%M')}"
@@ -93,29 +91,32 @@ async def run_broadcast_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         stmt_users = select(User.telegram_id).where(User.role != UserRole.ADMIN)
         user_ids = list(await session.scalars(stmt_users))
 
-        # Помечаем рассылку как отправленную
-        broadcast.sent = True
-        await session.commit()
-
     success_count = 0
     fail_count = 0
 
+    # Сначала выполняем отправку сообщений
     for user_id in user_ids:
         try:
-            # Отправка сообщений в неформатированном plain-тексте (parse_mode=None)
             await context.bot.send_message(
-                chat_id=user_id, text=broadcast_text, parse_mode=None
+                chat_id=user_id,
+                text=broadcast_text,
+                parse_mode=None
             )
             success_count += 1
         except Exception as exc:
             logger.warning("Failed to send broadcast to user %s: %s", user_id, exc)
             fail_count += 1
 
+    # Помечаем рассылку как отправленную в БД только после выполнения циклов рассылки
+    async with AsyncSessionFactory() as session:
+        db_broadcast = await session.get(Broadcast, broadcast_id)
+        if db_broadcast:
+            db_broadcast.sent = True
+            await session.commit()
+
     logger.info(
         "Broadcast %s processing complete. Sent: %d, Failed: %d",
-        broadcast_id,
-        success_count,
-        fail_count,
+        broadcast_id, success_count, fail_count
     )
 
     if admin_id:
@@ -127,14 +128,10 @@ async def run_broadcast_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                     f"Успешно доставлено: {success_count}\n"
                     f"Не доставлено: {fail_count}"
                 ),
-                parse_mode="HTML",
+                parse_mode="HTML"
             )
         except Exception as exc:
-            logger.warning(
-                "Failed to notify admin %s about broadcast job completion: %s",
-                admin_id,
-                exc,
-            )
+            logger.warning("Failed to notify admin %s about broadcast job completion: %s", admin_id, exc)
 
 
 async def restore_broadcast_jobs(app: Application) -> None:
@@ -143,18 +140,16 @@ async def restore_broadcast_jobs(app: Application) -> None:
         logger.warning("JobQueue is unavailable. Cannot restore broadcasts.")
         return
 
-    now_utc = datetime.now(UTC)
+    now_utc = datetime.now(timezone.utc)
 
     async with AsyncSessionFactory() as session:
         stmt = select(Broadcast).where(Broadcast.sent.is_(False))
         broadcasts = list(await session.scalars(stmt))
 
         for b in broadcasts:
-            # Преобразуем наивное UTC время из базы данных в aware datetime
-            scheduled_utc = b.scheduled_at.replace(tzinfo=UTC)
-
+            scheduled_utc = b.scheduled_at.replace(tzinfo=timezone.utc)
+            
             if scheduled_utc <= now_utc:
-                # Если время рассылки уже прошло, пока бот был выключен — отправляем немедленно
                 delay = 0.0
             else:
                 delay = (scheduled_utc - now_utc).total_seconds()
@@ -164,9 +159,9 @@ async def restore_broadcast_jobs(app: Application) -> None:
                 when=delay,
                 data={"broadcast_id": b.id},
                 name=f"broadcast_job_{b.id}",
+                job_kwargs={"misfire_grace_time": None}  # Защита от пропуска во время старта
             )
             logger.info(
                 "Restored scheduled broadcast ID %s from database. Execution in %s seconds.",
-                b.id,
-                delay,
+                b.id, delay
             )
