@@ -41,10 +41,11 @@ async def register_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def build_main_menu() -> InlineKeyboardMarkup:
-    """Генерирует главное меню, содержащее кнопку активации сертификата."""
+    """Генерирует главное меню, содержащее кнопку приобретения и активации сертификата."""
     keyboard = [
         [InlineKeyboardButton("Записаться", callback_data="book")],
-        [InlineKeyboardButton("Активировать сертификат", callback_data="activate_cert")], # Добавлено
+        [InlineKeyboardButton("Приобрести сертификат", callback_data="service:buy_certificate")],
+        [InlineKeyboardButton("Активировать сертификат", callback_data="activate_cert")],
         [
             InlineKeyboardButton(
                 "Связаться со штатным пирсером", callback_data="support"

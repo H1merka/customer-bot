@@ -12,8 +12,7 @@ SERVICE_OPTIONS = {
     "cleaning": "Чистка украшения",
     "consultation": "Консультация",
     "jewelry": "Покупка украшения",
-    "anodizing": "Анодирование титана украшения",
-    "buy_certificate": "Приобретение сертификата",  # Добавлена новая услуга
+    "buy_certificate": "Приобретение сертификата",
 }
 
 SERVICES_WITH_ZONE = {
@@ -30,7 +29,6 @@ SERVICES_WITH_MEDICAL = {
 SERVICES_GROUP_A = {
     SERVICE_OPTIONS["cleaning"],
     SERVICE_OPTIONS["jewelry"],
-    SERVICE_OPTIONS["anodizing"],
 }
 
 PIERCING_ZONES = {
@@ -97,8 +95,8 @@ CUSTOM_TEXT_LABELS = {
     "medical_q4": "Мед. вопрос 4 (Хронические заболевания)",
     "medical_q5": "Мед. вопрос 5 (Заживление ран)",
     "medical_q6": "Мед. вопрос 6 (Кожные заболевания)",
-    "cert_prepayment_info": "Инструкция по оплате сертификата",  # Добавлено
-    "cert_success": "Успешная покупка сертификата",  # Добавлено
+    "cert_prepayment_info": "Инструкция по оплате сертификата",
+    "cert_success": "Успешная покупка сертификата",
 }
 
 DEFAULT_CUSTOM_TEXTS = {
@@ -114,7 +112,6 @@ DEFAULT_CUSTOM_TEXTS = {
     "medical_q4": "Есть ли хронические заболевания?",
     "medical_q5": "Были ли в прошлом проблемы с заживлением пирсинга или ран?",
     "medical_q6": "Есть ли кожные заболевания?",
-    # Добавлены дефолтные тексты для сертификатов
     "cert_prepayment_info": "Для покупки сертификата на услугу «{target_service}» на сумму {amount} руб., пожалуйста, переведите полную стоимость ({amount} руб.) по номеру телефона <code>89630313100</code> (Т-Банк, получатель Юлия С.).\n\n⚠️ <b>Внимание:</b> получатель сертификата должен быть здоров и совершеннолетен (либо иметь согласие родителей на процедуру).\n\nПосле оплаты администратор проверит перевод и вы получите уникальный код активации сертификата.",
     "cert_success": "🎉 <b>Сертификат успешно приобретен!</b>\n\n🎁 Код активации: <code>{code}</code>\nУслуга: <b>{target_service}</b>\nСумма: <b>{amount} руб.</b>\n\nПередайте этот 5-значный код получателю. Для активации ему достаточно запустить этого бота и нажать кнопку «Активировать сертификат» в главном меню.\n\n⚠️ <i>Напоминание: получатель сертификата должен быть здоров и совершеннолетен (или иметь разрешение родителей).</i>",
 }
@@ -207,9 +204,9 @@ def clear_booking_session(user_data: dict) -> None:
         "photo_message_id",
         "zone_menu_message_id",
         "client_tg_link",
-        "active_cert_code",      # Новое
-        "cert_target_service",  # Новое
-        "cert_amount",          # Новое
+        "active_cert_code",
+        "cert_target_service",
+        "cert_amount",
     ]
     for key in booking_keys:
         user_data.pop(key, None)

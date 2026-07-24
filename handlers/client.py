@@ -194,8 +194,6 @@ def build_service_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(SERVICE_OPTIONS["cleaning"], callback_data="service:cleaning")],
         [InlineKeyboardButton(SERVICE_OPTIONS["consultation"], callback_data="service:consultation")],
         [InlineKeyboardButton(SERVICE_OPTIONS["jewelry"], callback_data="service:jewelry")],
-        [InlineKeyboardButton(SERVICE_OPTIONS["anodizing"], callback_data="service:anodizing")],
-        [InlineKeyboardButton(SERVICE_OPTIONS["buy_certificate"], callback_data="service:buy_certificate")], # Новое
         [InlineKeyboardButton("Назад", callback_data="back:main")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -207,7 +205,6 @@ def build_cert_target_service_menu() -> InlineKeyboardMarkup:
     keyboard = []
     for key, val in SERVICE_OPTIONS.items():
         if key != "buy_certificate":
-            # ИСПРАВЛЕНО: передаем латинский ключ key вместо длинного кириллического val
             keyboard.append([InlineKeyboardButton(val, callback_data=f"cert_target:{key}")])
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="booking_back")])
     return InlineKeyboardMarkup(keyboard)
@@ -319,6 +316,18 @@ async def transition_to_state(
         text = await get_stage_text("zone_selection")
         reply_markup = build_piercing_zone_menu()
     elif state_name == "await_tg_link":
+        # Вариант Б: автоматическое определение юзернейма пользователя в приоритете
+        user = update.effective_user
+        if user and user.username:
+            context.user_data["client_tg_link"] = f"@{user.username}"
+            selected_service = context.user_data.get("selected_service")
+            if selected_service == SERVICE_OPTIONS["buy_certificate"]:
+                await transition_to_state(update, context, "await_prepayment", edit_message=edit_message)
+            else:
+                await transition_to_state(update, context, "await_age", edit_message=edit_message)
+            return
+
+        # Интерактивный ввод ссылки для связи, если у пользователя нет username
         selected_service = context.user_data.get("selected_service")
         if selected_service == SERVICE_OPTIONS["buy_certificate"]:
             target_service = context.user_data.get("cert_target_service", "Не указано")
@@ -545,13 +554,14 @@ async def handle_booking_back(
         return
 
     elif current_state == "cert_target_selection":
+        # Возврат в главное меню при оформлении сертификата
         context.user_data.pop("selected_service", None)
         query = update.callback_query
         if query:
-            await query.edit_message_text("Выберите услугу:", reply_markup=build_service_menu())
+            await query.edit_message_text("Главное меню", reply_markup=build_main_menu())
         else:
-            await update.effective_message.reply_text("Выберите услугу:", reply_markup=build_service_menu())
-        context.user_data["booking_state"] = "service_selection"
+            await update.effective_message.reply_text("Главное меню", reply_markup=build_main_menu())
+        context.user_data["booking_state"] = None
         return
 
     elif current_state == "await_cert_amount":
@@ -1103,7 +1113,6 @@ async def handle_main_menu_callback(
             reply_markup=build_service_menu(),
         )
     elif data == "activate_cert":
-        # Переход к FSM состояния ввода кода активации
         context.user_data["booking_state"] = "await_cert_activation"
         context.user_data["history"] = []
         await query.edit_message_text(
@@ -1183,10 +1192,8 @@ async def handle_cert_target_selection(
         return
     await query.answer()
 
-    # Получаем переданный короткий ключ (например, "anodizing")
     target_key = query.data.split(":", 1)[1]
     
-    # ИСПРАВЛЕНО: Преобразуем латинский ключ обратно в читаемое русское название из SERVICE_OPTIONS
     from config.constants import SERVICE_OPTIONS
     target_val = SERVICE_OPTIONS.get(target_key, target_key)
     
@@ -1362,7 +1369,6 @@ async def handle_booking_input(
 
             target_service = cert.target_service
 
-        # Сброс и сохранение сессии активации
         clear_booking_session(context.user_data)
         context.user_data["active_cert_code"] = text
         context.user_data["selected_service"] = target_service
@@ -1408,7 +1414,6 @@ async def handle_booking_input(
         context.user_data["client_tg_link"] = text
         context.user_data.setdefault("history", []).append("await_tg_link")
         
-        # Если оформляется покупка подарочного сертификата — полностью пропускаем возрастные и медицинские вопросы!
         if context.user_data.get("selected_service") == SERVICE_OPTIONS["buy_certificate"]:
             await transition_to_state(update, context, "await_prepayment")
         else:
@@ -1686,7 +1691,6 @@ async def handle_booking_callback(
             
             user.is_prepaid = False
             
-            # Логика списания сертификата по Варианту А
             active_cert_code = context.user_data.get("active_cert_code")
             cert_info_for_desc = ""
             if active_cert_code:
@@ -1738,7 +1742,6 @@ async def handle_booking_callback(
             if booking.skin_disease:
                 desc_lines.append(f"Кожные заболевания: {booking.skin_disease}")
 
-            # Интеграция информации об активации сертификата в Google Календарь
             if cert_info_for_desc:
                 desc_lines.append(cert_info_for_desc)
 
@@ -1890,7 +1893,7 @@ client_handlers = [
         handle_main_menu_callback, pattern=r"^(book|support|healing|activate_cert|back:main)$"
     ),
     CallbackQueryHandler(handle_service_selection, pattern=r"^service:"),
-    CallbackQueryHandler(handle_cert_target_selection, pattern=r"^cert_target:"), # Новое
+    CallbackQueryHandler(handle_cert_target_selection, pattern=r"^cert_target:"),
     CallbackQueryHandler(handle_zone_selection_callback, pattern=r"^p_zone:"),
     CallbackQueryHandler(handle_type_selection_callback, pattern=r"^p_type:"),
     CallbackQueryHandler(handle_resume_booking, pattern=r"^resume_booking$"),

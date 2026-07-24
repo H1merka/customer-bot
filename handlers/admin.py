@@ -33,10 +33,8 @@ from database.models import (
     StudioSetting,
     User,
     UserRole,
-    Broadcast,
 )
 from services.google_calendar import GoogleCalendarService
-from scheduler.jobs import run_broadcast_job
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -120,12 +118,6 @@ def build_admin_settings_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 "Настройка интерфейса пользователя",
                 callback_data="admin_setting:ui_config",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "Добавить рассылку",
-                callback_data="admin_setting:add_broadcast",
             )
         ],
         [InlineKeyboardButton("Назад", callback_data="admin_menu:back_to_start")],
@@ -341,12 +333,6 @@ async def handle_admin_setting_callback(
         await query.edit_message_text(
             "Настройка пользовательского интерфейса (UI):\n\nВыберите интересующий раздел:",
             reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-    elif setting_action == "add_broadcast":
-        context.user_data["admin_state"] = "await_broadcast_text"
-        await query.edit_message_text(
-            "Введите текст сообщения для рассылки всем пользователям (как обычный текст без форматирования):",
-            reply_markup=build_admin_cancel_button(),
         )
 
 
@@ -991,85 +977,6 @@ async def handle_admin_input(
         return
 
     text = update.effective_message.text.strip()
-
-    if admin_state == "await_broadcast_text":
-        context.user_data["temp_broadcast_text"] = text
-        context.user_data["admin_state"] = "await_broadcast_time"
-        await update.effective_message.reply_text(
-            "Текст рассылки сохранен.\n\n"
-            "Теперь укажите дату и время отправки в формате <b>ДД.ММ.ГГГГ ХХ:ХХ</b> (например, <code>25.07.2026 15:30</code>):",
-            reply_markup=build_admin_cancel_button(),
-            parse_mode="HTML"
-        )
-        raise ApplicationHandlerStop()
-
-    if admin_state == "await_broadcast_time":
-        try:
-            parsed_dt = datetime.strptime(text, "%d.%m.%Y %H:%M")
-            local_tz = timezone(timedelta(hours=5))
-            aware_dt = parsed_dt.replace(tzinfo=local_tz)
-            now_local = datetime.now(local_tz)
-
-            if aware_dt <= now_local:
-                await update.effective_message.reply_text(
-                    "Вы указали время в прошлом. Пожалуйста, введите дату и время в будущем (ДД.ММ.ГГГГ ХХ:ХХ):",
-                    reply_markup=build_admin_cancel_button(),
-                )
-                raise ApplicationHandlerStop()
-
-        except ValueError:
-            await update.effective_message.reply_text(
-                "Некорректный формат даты или времени. Пожалуйста, введите по шаблону ДД.ММ.ГГГГ ХХ:ХХ (например, 25.07.2026 15:30):",
-                reply_markup=build_admin_cancel_button(),
-            )
-            raise ApplicationHandlerStop()
-
-        broadcast_text = context.user_data.pop("temp_broadcast_text", None)
-        if not broadcast_text:
-            await update.effective_message.reply_text(
-                "Произошла непредвиденная ошибка: text рассылки не найден. Пожалуйста, попробуйте создать рассылку заново.",
-                reply_markup=build_admin_settings_menu(),
-            )
-            context.user_data.pop("admin_state", None)
-            raise ApplicationHandlerStop()
-
-        utc_dt = aware_dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-        async with AsyncSessionFactory() as session:
-            broadcast = Broadcast(
-                text=broadcast_text,
-                scheduled_at=utc_dt,
-                sent=False,
-                admin_id=update.effective_user.id
-            )
-            session.add(broadcast)
-            await session.commit()
-            await session.refresh(broadcast)
-
-        # Стабильное планирование асинхронной задачи с использованием timezone-aware datetime
-        if context.job_queue:
-            context.job_queue.run_once(
-                run_broadcast_job,
-                when=aware_dt,  # Напрямую передаем timezone-aware объект в JobQueue
-                data={"broadcast_id": broadcast.id},
-                name=f"broadcast_job_{broadcast.id}",
-                job_kwargs={"misfire_grace_time": None}  # Защита от пропусков APScheduler
-            )
-            await update.effective_message.reply_text(
-                f"Рассылка успешно запланирована!\n\n"
-                f"Время отправки: {text} (GMT+5)\n"
-                f"Текст:\n{broadcast_text}",
-                reply_markup=build_admin_settings_menu(),
-            )
-        else:
-            await update.effective_message.reply_text(
-                "Внимание: рассылка успешно сохранена в базу данных, но планировщик бота (JobQueue) временно недоступен. "
-                "Рассылка будет автоматически отправлена при очередном перезапуске бота.",
-                reply_markup=build_admin_settings_menu(),
-            )
-
-        context.user_data.pop("admin_state", None)
-        raise ApplicationHandlerStop()
 
     if admin_state == "await_healing_type_text":
         zone_key = context.user_data.pop("edit_healing_zone_key", None)

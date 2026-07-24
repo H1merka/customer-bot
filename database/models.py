@@ -129,16 +129,6 @@ class DayOff(Base):
     google_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
-class Broadcast(Base):
-    __tablename__ = "broadcasts"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
-    sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-
-
 class Certificate(Base):
     """Модель хранения подарочных сертификатов студии."""
     __tablename__ = "certificates"
